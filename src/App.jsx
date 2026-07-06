@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { Maximize, Zap, Settings2, List, Code2, Compass, ChevronRight, Activity } from 'lucide-react';
 
 // Academic color palette: distinct but slightly muted/professional tones
@@ -156,7 +156,7 @@ export default function App() {
         ];
       }
     }
-    return { id: 'T0', name: 'T0 (Base)', points, color: '#334155' }; 
+    return { id: 'T0', name: 'T0 (Base)', points, color: '#e2e8f0' }; 
   }, [baseCoordsInput, baseInputMode, angleParams]);
 
 
@@ -235,7 +235,7 @@ export default function App() {
       triangles,
       rayLine: { x1: O.x, y1: O.y, x2: O.x + finalT * D.x, y2: O.y + finalT * D.y }
     };
-  }, [simulatorMode, baseTriangle, rayStartVertex, rayAngle, maxBounces, svgSize]);
+  }, [simulatorMode, baseTriangle, rayStartVertex, rayAngle, maxBounces, svgSize, zoom]);
 
 
   const codeData = useMemo(() => {
@@ -422,28 +422,28 @@ export default function App() {
 
 
   return (
-    <div className="flex h-screen w-full bg-[#f8f9fa] text-slate-800 font-sans overflow-hidden">
+    <div className="flex h-screen w-full min-w-0 bg-[#080b0f] text-slate-200 font-sans overflow-hidden">
       
       {/* LEFT PANEL - CONTROLS & INSPECTOR */}
-      <div className="w-[380px] border-r border-gray-200 flex flex-col bg-white shadow-sm z-10 overflow-hidden shrink-0">
+      <div className="w-[340px] 2xl:w-[360px] border-r border-white/10 flex flex-col bg-[#10151c] shadow-[12px_0_36px_rgba(0,0,0,0.32)] z-10 overflow-hidden shrink-0">
         
         {/* App Header & Tabs */}
-        <div className="pt-12 pb-0 px-6 border-b border-gray-200 bg-white shrink-0">
-          <h1 className="text-xl font-bold text-slate-800 tracking-tight flex items-center gap-2 mb-1">
-            <Activity className="w-5 h-5 text-blue-600" /> Room Modeler
+        <div className="pt-8 pb-0 px-5 border-b border-white/10 bg-[#0c1117] shrink-0">
+          <h1 className="text-xl font-bold text-slate-100 tracking-tight flex items-center gap-2 mb-1">
+            <Activity className="w-5 h-5 text-cyan-300" /> Unfolding Viewer
           </h1>
-          <p className="text-[11px] font-medium text-slate-400 uppercase tracking-widest mb-4">Billiards Path Analysis</p>
+          <p className="text-[11px] font-medium text-slate-500 uppercase tracking-widest mb-5">Invisible Point Workbench</p>
           
-          <div className="flex gap-4">
+          <div className="flex gap-2">
             <button 
               onClick={() => setSimulatorMode('ray')}
-              className={`pb-3 text-sm font-semibold transition-all border-b-2 flex items-center gap-1.5 ${simulatorMode === 'ray' ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+              className={`px-3 pb-3 text-sm font-semibold transition-all border-b-2 flex items-center gap-1.5 ${simulatorMode === 'ray' ? 'border-amber-300 text-amber-200' : 'border-transparent text-slate-500 hover:text-slate-200'}`}
             >
               <Zap className="w-4 h-4"/> Ray Sim
             </button>
             <button 
               onClick={() => setSimulatorMode('code')}
-              className={`pb-3 text-sm font-semibold transition-all border-b-2 flex items-center gap-1.5 ${simulatorMode === 'code' ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+              className={`px-3 pb-3 text-sm font-semibold transition-all border-b-2 flex items-center gap-1.5 ${simulatorMode === 'code' ? 'border-cyan-300 text-cyan-200' : 'border-transparent text-slate-500 hover:text-slate-200'}`}
             >
               <Code2 className="w-4 h-4"/> Code Sim
             </button>
@@ -451,17 +451,17 @@ export default function App() {
         </div>
 
         {/* Scrollable Inspector Body */}
-        <div className="flex-1 overflow-y-auto custom-scrollbar bg-gray-50/50">
+        <div className="flex-1 overflow-y-auto custom-scrollbar bg-[#0f141a]">
           
           {/* BASE GEOMETRY CONFIG */}
-          <div className="p-5 border-b border-gray-100 bg-white m-3 rounded-xl shadow-sm border">
+          <div className="p-4 bg-[#151c24] m-3 rounded-lg shadow-[0_8px_28px_rgba(0,0,0,0.28)] border border-white/10">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xs uppercase tracking-wider font-bold text-slate-500 flex items-center gap-1.5">
+              <h2 className="text-xs uppercase tracking-wider font-bold text-slate-400 flex items-center gap-1.5">
                 <Settings2 className="w-3.5 h-3.5"/> Base Geometry
               </h2>
-              <div className="flex bg-gray-100 p-0.5 rounded-md">
-                <button onClick={() => setBaseInputMode('coords')} className={`px-2 py-1 text-[10px] font-bold rounded ${baseInputMode === 'coords' ? 'bg-white shadow-sm text-slate-700' : 'text-slate-500'}`}>XY</button>
-                <button onClick={() => setBaseInputMode('angles')} className={`px-2 py-1 text-[10px] font-bold rounded ${baseInputMode === 'angles' ? 'bg-white shadow-sm text-slate-700' : 'text-slate-500'}`}>Deg</button>
+              <div className="flex bg-[#0b1016] p-0.5 rounded-md border border-white/10">
+                <button onClick={() => setBaseInputMode('coords')} className={`px-2 py-1 text-[10px] font-bold rounded ${baseInputMode === 'coords' ? 'bg-cyan-400/15 text-cyan-100 shadow-sm' : 'text-slate-500 hover:text-slate-200'}`}>XY</button>
+                <button onClick={() => setBaseInputMode('angles')} className={`px-2 py-1 text-[10px] font-bold rounded ${baseInputMode === 'angles' ? 'bg-cyan-400/15 text-cyan-100 shadow-sm' : 'text-slate-500 hover:text-slate-200'}`}>Deg</button>
               </div>
             </div>
 
@@ -469,42 +469,42 @@ export default function App() {
               <div className="space-y-2.5">
                 {[0, 1, 2].map(i => (
                   <div key={i} className="flex items-center gap-2">
-                    <span className="text-[11px] font-bold text-slate-400 w-12 text-right mr-1">{['A', 'B', 'C'][i]} (V{i})</span>
+                    <span className="text-[11px] font-bold text-slate-500 w-12 text-right mr-1">{['A', 'B', 'C'][i]} (V{i})</span>
                     <input type="text" value={baseCoordsInput[i].x} onChange={e => {
                       const newCoords = [...baseCoordsInput];
                       newCoords[i].x = e.target.value;
                       setBaseCoordsInput(newCoords);
-                    }} className="w-full bg-gray-50 border border-gray-200 rounded-md px-2.5 py-1.5 text-sm focus:bg-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none font-mono text-slate-700 transition-all" placeholder="x" />
+                    }} className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2.5 py-1.5 text-sm focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 placeholder:text-slate-600 transition-all" placeholder="x" />
                     <input type="text" value={baseCoordsInput[i].y} onChange={e => {
                       const newCoords = [...baseCoordsInput];
                       newCoords[i].y = e.target.value;
                       setBaseCoordsInput(newCoords);
-                    }} className="w-full bg-gray-50 border border-gray-200 rounded-md px-2.5 py-1.5 text-sm focus:bg-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none font-mono text-slate-700 transition-all" placeholder="y" />
+                    }} className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2.5 py-1.5 text-sm focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 placeholder:text-slate-600 transition-all" placeholder="y" />
                   </div>
                 ))}
               </div>
             ) : (
               <div className="space-y-2.5">
                 <div className="flex items-center gap-2">
-                  <span className="text-[11px] font-bold text-slate-400 w-16 text-right mr-1">Base Length</span>
-                  <input type="number" step="0.1" value={angleParams.length} onChange={e => setAngleParams({...angleParams, length: e.target.value})} className="w-full bg-gray-50 border border-gray-200 rounded-md px-2.5 py-1.5 text-sm focus:bg-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none font-mono text-slate-700 transition-all" />
+                  <span className="text-[11px] font-bold text-slate-500 w-16 text-right mr-1">Base Length</span>
+                  <input type="number" step="0.1" value={angleParams.length} onChange={e => setAngleParams({...angleParams, length: e.target.value})} className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2.5 py-1.5 text-sm focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 transition-all" />
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-[11px] font-bold text-slate-400 w-16 text-right mr-1">Angle A</span>
+                  <span className="text-[11px] font-bold text-slate-500 w-16 text-right mr-1">Angle A</span>
                   <div className="relative w-full">
-                    <input type="number" step="0.1" value={angleParams.a} onChange={e => setAngleParams({...angleParams, a: e.target.value})} className="w-full bg-gray-50 border border-gray-200 rounded-md px-2.5 py-1.5 text-sm focus:bg-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none font-mono text-slate-700 transition-all pr-6" />
-                    <span className="absolute right-2 top-1.5 text-gray-400 font-mono text-xs">°</span>
+                    <input type="number" step="0.1" value={angleParams.a} onChange={e => setAngleParams({...angleParams, a: e.target.value})} className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2.5 py-1.5 text-sm focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 transition-all pr-6" />
+                    <span className="absolute right-2 top-1.5 text-slate-500 font-mono text-xs">&deg;</span>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-[11px] font-bold text-slate-400 w-16 text-right mr-1">Angle B</span>
+                  <span className="text-[11px] font-bold text-slate-500 w-16 text-right mr-1">Angle B</span>
                   <div className="relative w-full">
-                    <input type="number" step="0.1" value={angleParams.b} onChange={e => setAngleParams({...angleParams, b: e.target.value})} className="w-full bg-gray-50 border border-gray-200 rounded-md px-2.5 py-1.5 text-sm focus:bg-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none font-mono text-slate-700 transition-all pr-6" />
-                    <span className="absolute right-2 top-1.5 text-gray-400 font-mono text-xs">°</span>
+                    <input type="number" step="0.1" value={angleParams.b} onChange={e => setAngleParams({...angleParams, b: e.target.value})} className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2.5 py-1.5 text-sm focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 transition-all pr-6" />
+                    <span className="absolute right-2 top-1.5 text-slate-500 font-mono text-xs">&deg;</span>
                   </div>
                 </div>
                 {(Number(angleParams.a) + Number(angleParams.b) >= 180) && (
-                  <div className="text-[10px] text-red-500 mt-1 pl-16 text-center font-medium bg-red-50 rounded py-1 border border-red-100">Angles must sum &lt; 180°</div>
+                  <div className="text-[10px] text-red-200 mt-1 pl-16 text-center font-medium bg-red-500/10 rounded py-1 border border-red-400/20">Angles must sum &lt; 180&deg;</div>
                 )}
               </div>
             )}
@@ -512,47 +512,47 @@ export default function App() {
 
           {/* SIMULATOR PARAMETERS */}
           {simulatorMode === 'ray' ? (
-            <div className="p-5 border-b border-gray-100 bg-white m-3 rounded-xl shadow-sm border">
-              <h2 className="text-xs uppercase tracking-wider font-bold text-amber-600 mb-4 flex items-center gap-1.5">
+            <div className="p-4 bg-[#151c24] m-3 rounded-lg shadow-[0_8px_28px_rgba(0,0,0,0.28)] border border-white/10">
+              <h2 className="text-xs uppercase tracking-wider font-bold text-amber-200 mb-4 flex items-center gap-1.5">
                 <Zap className="w-3.5 h-3.5" /> Simulation Rules
               </h2>
               <div className="space-y-4">
                 <div>
-                  <label className="text-[11px] font-bold text-slate-600 flex justify-between mb-1.5"><span>Origin Vertex</span></label>
+                  <label className="text-[11px] font-bold text-slate-400 flex justify-between mb-1.5"><span>Origin Vertex</span></label>
                   <div className="flex gap-2">
                     {[0, 1, 2].map(v => (
-                      <button key={v} onClick={() => setRayStartVertex(v)} className={`flex-1 py-1.5 text-xs rounded-md font-bold border transition-colors ${rayStartVertex === v ? 'bg-amber-50 border-amber-300 text-amber-700' : 'bg-white border-gray-200 text-gray-500 hover:bg-gray-50'}`}>{['A', 'B', 'C'][v]}</button>
+                      <button key={v} onClick={() => setRayStartVertex(v)} className={`flex-1 py-1.5 text-xs rounded-md font-bold border transition-colors ${rayStartVertex === v ? 'bg-amber-300/15 border-amber-300/40 text-amber-100' : 'bg-[#0b1016] border-white/10 text-slate-500 hover:text-slate-200 hover:border-slate-500/50'}`}>{['A', 'B', 'C'][v]}</button>
                     ))}
                   </div>
                 </div>
                 <div>
-                  <label className="text-[11px] font-bold text-slate-600 flex justify-between mb-1.5"><span>Trajectory Angle</span></label>
+                  <label className="text-[11px] font-bold text-slate-400 flex justify-between mb-1.5"><span>Trajectory Angle</span></label>
                   <div className="flex gap-3 items-center">
                     <input type="range" min="0" max="360" step="0.1" value={rayAngle} onChange={e => setRayAngle(parseFloat(e.target.value))} className="flex-1 accent-amber-600" />
                     <div className="relative w-20">
-                      <input type="number" value={rayAngle} onChange={e => setRayAngle(parseFloat(e.target.value))} className="w-full bg-gray-50 border border-gray-200 rounded-md px-2 py-1.5 text-xs text-center focus:bg-white focus:border-amber-500 focus:ring-1 focus:ring-amber-500 outline-none font-mono text-slate-700" />
-                      <span className="absolute right-1.5 top-1.5 text-gray-400 font-mono text-xs">°</span>
+                      <input type="number" value={rayAngle} onChange={e => setRayAngle(parseFloat(e.target.value))} className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2 py-1.5 text-xs text-center focus:bg-[#101923] focus:border-amber-300 focus:ring-1 focus:ring-amber-300 outline-none font-mono text-slate-100" />
+                      <span className="absolute right-1.5 top-1.5 text-slate-500 font-mono text-xs">&deg;</span>
                     </div>
                   </div>
                 </div>
                 <div>
-                  <label className="text-[11px] font-bold text-slate-600 block mb-1.5">Max Bounces</label>
-                  <input type="number" min="0" max="1000" step="1" value={maxBounces} onChange={e => setMaxBounces(parseInt(e.target.value))} className="w-full bg-gray-50 border border-gray-200 rounded-md px-3 py-1.5 text-sm focus:bg-white focus:border-amber-500 focus:ring-1 focus:ring-amber-500 outline-none font-mono text-slate-700" />
+                  <label className="text-[11px] font-bold text-slate-400 block mb-1.5">Max Bounces</label>
+                  <input type="number" min="0" max="1000" step="1" value={maxBounces} onChange={e => setMaxBounces(parseInt(e.target.value))} className="w-full bg-[#0b1016] border border-white/10 rounded-md px-3 py-1.5 text-sm focus:bg-[#101923] focus:border-amber-300 focus:ring-1 focus:ring-amber-300 outline-none font-mono text-slate-100" />
                 </div>
               </div>
             </div>
           ) : (
-            <div className="p-5 border-b border-gray-100 bg-white m-3 rounded-xl shadow-sm border">
-              <h2 className="text-xs uppercase tracking-wider font-bold text-blue-600 mb-2 flex items-center gap-1.5">
+            <div className="p-4 bg-[#151c24] m-3 rounded-lg shadow-[0_8px_28px_rgba(0,0,0,0.28)] border border-white/10">
+              <h2 className="text-xs uppercase tracking-wider font-bold text-cyan-200 mb-2 flex items-center gap-1.5">
                 <Code2 className="w-3.5 h-3.5" /> Sequence Parser
               </h2>
-              <p className="text-[10px] text-gray-500 mb-3 leading-relaxed">
-                Paste space-separated codes. The heuristic engine intelligently maps symbolic variables (x, y, z) to physical corners to optimize unfolding linearity.
+              <p className="text-[10px] text-slate-500 mb-3 leading-relaxed">
+                Space-separated bounce-block counts, parsed into symbolic angle runs.
               </p>
               <textarea 
                 value={billiardsCode}
                 onChange={e => setBilliardsCode(e.target.value)}
-                className="w-full bg-gray-50 border border-gray-200 rounded-md p-2.5 text-sm focus:bg-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none font-mono resize-none h-20 text-slate-700 shadow-inner"
+                className="w-full bg-[#0b1016] border border-white/10 rounded-md p-2.5 text-sm focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono resize-none h-20 text-slate-100 shadow-inner placeholder:text-slate-600"
                 placeholder="e.g. 1 5 16 5 1 2 3 6"
               />
             </div>
@@ -563,21 +563,21 @@ export default function App() {
             
             {/* V0 TRAJECTORY (Always visible if active) */}
             {activeTriangles.length > 0 && (
-              <div className="mb-3 bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+              <div className="mb-3 bg-[#151c24] p-4 rounded-lg border border-white/10 shadow-[0_8px_28px_rgba(0,0,0,0.22)]">
                 <h3 className="text-[10px] uppercase tracking-wider font-bold text-slate-400 mb-3 flex items-center gap-1.5">
-                  <Compass className="w-3 h-3 text-slate-500"/> Trajectory Analysis (A)
+                  <Compass className="w-3 h-3 text-cyan-300"/> Trajectory Analysis (A)
                 </h3>
                 <div className="flex flex-col gap-2">
-                  <div className="flex justify-between items-center border-b border-gray-100 pb-2">
+                  <div className="flex justify-between items-center border-b border-white/10 pb-2">
                     <span className="text-[11px] text-slate-500 font-medium">Final Coordinate</span>
-                    <span className="text-xs font-mono text-slate-800 font-semibold bg-gray-50 px-2 py-0.5 rounded border border-gray-100">
+                    <span className="text-xs font-mono text-slate-100 font-semibold bg-[#0b1016] px-2 py-0.5 rounded border border-white/10">
                       {finalA.x.toFixed(4)}, {finalA.y.toFixed(4)}
                     </span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-[11px] text-slate-500 font-medium">Global Angle <span className="font-mono text-[9px] text-gray-400 ml-1">arctan(y/x)</span></span>
-                    <span className="text-xs font-mono text-blue-600 font-bold bg-blue-50 px-2 py-0.5 rounded border border-blue-100">
-                      {getGlobalAngle(startA, finalA).toFixed(6)}°
+                    <span className="text-[11px] text-slate-500 font-medium">Global Angle <span className="font-mono text-[9px] text-slate-600 ml-1">atan2</span></span>
+                    <span className="text-xs font-mono text-cyan-100 font-bold bg-cyan-400/10 px-2 py-0.5 rounded border border-cyan-300/20">
+                      {getGlobalAngle(startA, finalA).toFixed(6)}&deg;
                     </span>
                   </div>
                 </div>
@@ -586,14 +586,14 @@ export default function App() {
 
             {/* SEQUENCE LOGS (Code Sim Only) */}
             {simulatorMode === 'code' && codeData.parsedSequence.length > 0 && (
-              <div className="mb-3 bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+              <div className="mb-3 bg-[#151c24] p-4 rounded-lg border border-white/10 shadow-[0_8px_28px_rgba(0,0,0,0.22)]">
                 <h3 className="text-[10px] uppercase tracking-wider font-bold text-slate-400 mb-2 flex items-center gap-1.5">
                   <ChevronRight className="w-3 h-3" /> Unfolded Sequence
                 </h3>
-                <div className="bg-gray-50 p-2 rounded-lg border border-gray-100 max-h-24 overflow-y-auto flex flex-wrap gap-1.5 custom-scrollbar shadow-inner">
+                <div className="bg-[#0b1016] p-2 rounded-md border border-white/10 max-h-24 overflow-y-auto flex flex-wrap gap-1.5 custom-scrollbar shadow-inner">
                   {codeData.parsedSequence.map((step, idx) => (
-                    <span key={idx} className="bg-white text-slate-700 text-[10px] font-mono px-1.5 py-0.5 rounded border border-gray-200 shadow-sm flex items-center">
-                      {step.count}<span className="text-blue-600 font-bold ml-0.5">{step.angle}</span>
+                    <span key={idx} className="bg-[#17212b] text-slate-200 text-[10px] font-mono px-1.5 py-0.5 rounded border border-white/10 shadow-sm flex items-center">
+                      {step.count}<span className="text-cyan-300 font-bold ml-0.5">{step.angle}</span>
                     </span>
                   ))}
                 </div>
@@ -601,47 +601,47 @@ export default function App() {
                 <h3 className="text-[10px] uppercase tracking-wider font-bold text-slate-400 mt-4 mb-2 flex items-center gap-1.5">
                   <ChevronRight className="w-3 h-3" /> Boundary Intersections
                 </h3>
-                <div className="bg-gray-50 p-2.5 rounded-lg border border-gray-100 max-h-24 overflow-y-auto font-mono text-[11px] font-medium text-slate-600 custom-scrollbar break-words leading-relaxed shadow-inner tracking-widest">
+                <div className="bg-[#0b1016] p-2.5 rounded-md border border-white/10 max-h-24 overflow-y-auto font-mono text-[11px] font-medium text-slate-300 custom-scrollbar break-words leading-relaxed shadow-inner tracking-widest">
                   {codeData.sideSequence?.join(' ')}
                 </div>
               </div>
             )}
 
             {/* VERTEX LOGS */}
-            <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
-              <div className="flex items-center justify-between mb-3 border-b border-gray-100 pb-2">
+            <div className="bg-[#151c24] p-4 rounded-lg border border-white/10 shadow-[0_8px_28px_rgba(0,0,0,0.22)]">
+              <div className="flex items-center justify-between mb-3 border-b border-white/10 pb-2">
                 <h2 className="text-[10px] uppercase tracking-wider font-bold text-slate-400 flex items-center gap-1.5">
                   <List className="w-3 h-3"/> Vertices Log
                 </h2>
-                <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500 cursor-pointer hover:text-blue-600 transition-colors">
-                  <input type="checkbox" checked={showAllLabels} onChange={e => setShowAllLabels(e.target.checked)} className="accent-blue-600 w-3 h-3" />
+                <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500 cursor-pointer hover:text-cyan-200 transition-colors">
+                  <input type="checkbox" checked={showAllLabels} onChange={e => setShowAllLabels(e.target.checked)} className="accent-cyan-400 w-3 h-3" />
                   PERSIST LABELS
                 </label>
               </div>
 
               <div className="space-y-2">
-                <div className="text-xs font-mono bg-gray-50 p-2.5 rounded-lg border border-gray-200 relative overflow-hidden">
-                  <div className="absolute left-0 top-0 bottom-0 w-1 bg-slate-700" />
-                  <div className="font-bold mb-1.5 text-slate-700 ml-1">{baseTriangle.name}</div>
+                <div className="text-xs font-mono bg-[#0b1016] p-2.5 rounded-md border border-white/10 relative overflow-hidden">
+                  <div className="absolute left-0 top-0 bottom-0 w-1 bg-slate-300" />
+                  <div className="font-bold mb-1.5 text-slate-200 ml-1">{baseTriangle.name}</div>
                   <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-slate-500 ml-1">
-                    <div>A ({labelsMap[0]}): <span className="text-slate-800 font-medium">{baseTriangle.points[0].x.toFixed(4)}, {baseTriangle.points[0].y.toFixed(4)}</span></div>
-                    <div>B ({labelsMap[1]}): <span className="text-slate-800 font-medium">{baseTriangle.points[1].x.toFixed(4)}, {baseTriangle.points[1].y.toFixed(4)}</span></div>
-                    <div className="col-span-2">C ({labelsMap[2]}): <span className="text-slate-800 font-medium">{baseTriangle.points[2].x.toFixed(4)}, {baseTriangle.points[2].y.toFixed(4)}</span></div>
+                    <div>A ({labelsMap[0]}): <span className="text-slate-200 font-medium">{baseTriangle.points[0].x.toFixed(4)}, {baseTriangle.points[0].y.toFixed(4)}</span></div>
+                    <div>B ({labelsMap[1]}): <span className="text-slate-200 font-medium">{baseTriangle.points[1].x.toFixed(4)}, {baseTriangle.points[1].y.toFixed(4)}</span></div>
+                    <div className="col-span-2">C ({labelsMap[2]}): <span className="text-slate-200 font-medium">{baseTriangle.points[2].x.toFixed(4)}, {baseTriangle.points[2].y.toFixed(4)}</span></div>
                   </div>
                 </div>
 
                 {activeTriangles.slice(0, 50).map(tri => (
-                  <div key={tri.id} className="text-[11px] font-mono bg-white p-2 rounded-lg border border-gray-100 shadow-sm relative overflow-hidden hover:bg-gray-50 transition-colors">
+                  <div key={tri.id} className="text-[11px] font-mono bg-[#111821] p-2 rounded-md border border-white/10 shadow-sm relative overflow-hidden hover:bg-[#18222c] transition-colors">
                     <div className="absolute left-0 top-0 bottom-0 w-1" style={{ backgroundColor: tri.color }} />
-                    <div className="font-bold mb-1 text-slate-600 ml-1.5">{tri.id}</div>
-                    <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-slate-400 ml-1.5">
-                      <div>A: <span className="text-slate-600">{tri.points[0].x.toFixed(4)}, {tri.points[0].y.toFixed(4)}</span></div>
-                      <div>B: <span className="text-slate-600">{tri.points[1].x.toFixed(4)}, {tri.points[1].y.toFixed(4)}</span></div>
-                      <div className="col-span-2">C: <span className="text-slate-600">{tri.points[2].x.toFixed(4)}, {tri.points[2].y.toFixed(4)}</span></div>
+                    <div className="font-bold mb-1 text-slate-300 ml-1.5">{tri.id}</div>
+                    <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-slate-500 ml-1.5">
+                      <div>A: <span className="text-slate-300">{tri.points[0].x.toFixed(4)}, {tri.points[0].y.toFixed(4)}</span></div>
+                      <div>B: <span className="text-slate-300">{tri.points[1].x.toFixed(4)}, {tri.points[1].y.toFixed(4)}</span></div>
+                      <div className="col-span-2">C: <span className="text-slate-300">{tri.points[2].x.toFixed(4)}, {tri.points[2].y.toFixed(4)}</span></div>
                     </div>
                   </div>
                 ))}
-                {activeTriangles.length > 50 && <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 text-center py-2 bg-gray-50 rounded-lg border border-gray-100">...and {activeTriangles.length - 50} more</div>}
+                {activeTriangles.length > 50 && <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 text-center py-2 bg-[#0b1016] rounded-md border border-white/10">...and {activeTriangles.length - 50} more</div>}
               </div>
             </div>
             
@@ -649,17 +649,17 @@ export default function App() {
         </div>
       </div>
 
-      {/* RIGHT PANEL - SVG CANVAS (Graph Paper Aesthetic) */}
-      <div className="flex-1 relative bg-[#f8f9fa] overflow-hidden">
+      {/* RIGHT PANEL - SVG CANVAS */}
+      <div className="flex-1 min-w-0 relative bg-[#070b10] overflow-hidden">
         
         {/* Floating Canvas Toolbar */}
-        <div className="absolute top-6 right-6 z-10 flex gap-3">
+        <div className="absolute top-4 right-4 z-10 flex gap-2">
            {simulatorMode === 'code' && (
-             <div className="bg-white text-slate-600 px-4 py-2 text-[11px] rounded-lg shadow-sm border border-gray-200 font-mono font-bold flex items-center">
-                GENERATED: <span className="text-blue-600 ml-2">{activeTriangles.length}</span>
+             <div className="bg-[#101820]/95 text-slate-400 px-3 py-2 text-[11px] rounded-md shadow-[0_8px_24px_rgba(0,0,0,0.32)] border border-white/10 font-mono font-bold flex items-center backdrop-blur">
+                GENERATED: <span className="text-cyan-200 ml-2">{activeTriangles.length}</span>
              </div>
            )}
-          <button onClick={handleFitScreen} className="bg-white hover:bg-blue-50 text-slate-600 hover:text-blue-600 p-2.5 rounded-lg shadow-sm border border-gray-200 transition-colors" title="Fit to Screen">
+          <button onClick={handleFitScreen} className="bg-[#101820]/95 hover:bg-[#172230] text-slate-300 hover:text-cyan-200 p-2.5 rounded-md shadow-[0_8px_24px_rgba(0,0,0,0.32)] border border-white/10 transition-colors backdrop-blur" title="Fit to Screen">
             <Maximize className="w-4 h-4" />
           </button>
         </div>
@@ -673,15 +673,15 @@ export default function App() {
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseUp}
         >
-          <svg width="100%" height="100%" className="block">
+          <svg width="100%" height="100%" className="block bg-[#070b10]">
             
             {/* HARDWARE ACCELERATED RENDER LAYER */}
             <g transform={transformStr}>
               
               {/* Academic Graph Paper Grid */}
               <g opacity="1">
-                {grid.linesX.map(x => <line key={`gx-${x}`} x1={x} y1={grid.minMathY} x2={x} y2={grid.maxMathY} stroke={x === 0 ? "#cbd5e1" : "#e2e8f0"} strokeWidth={(x === 0 ? 2 : 1) / zoom} />)}
-                {grid.linesY.map(y => <line key={`gy-${y}`} x1={grid.minMathX} y1={y} x2={grid.maxMathX} y2={y} stroke={y === 0 ? "#cbd5e1" : "#e2e8f0"} strokeWidth={(y === 0 ? 2 : 1) / zoom} />)}
+                {grid.linesX.map(x => <line key={`gx-${x}`} x1={x} y1={grid.minMathY} x2={x} y2={grid.maxMathY} stroke={x === 0 ? "#334155" : "#182231"} strokeWidth={(x === 0 ? 2 : 1) / zoom} />)}
+                {grid.linesY.map(y => <line key={`gy-${y}`} x1={grid.minMathX} y1={y} x2={grid.maxMathX} y2={y} stroke={y === 0 ? "#334155" : "#182231"} strokeWidth={(y === 0 ? 2 : 1) / zoom} />)}
               </g>
 
               {/* Generated Reflections - Glassy geometry look */}
@@ -690,9 +690,9 @@ export default function App() {
                   key={tri.id}
                   points={`${tri.points[0].x},${tri.points[0].y} ${tri.points[1].x},${tri.points[1].y} ${tri.points[2].x},${tri.points[2].y}`}
                   fill={tri.color}
-                  fillOpacity="0.08"
+                  fillOpacity="0.1"
                   stroke={tri.color}
-                  strokeWidth={2 / zoom} 
+                  strokeWidth={2.2 / zoom} 
                   strokeLinejoin="round"
                 />
               ))}
@@ -701,7 +701,7 @@ export default function App() {
               <polygon
                 points={`${baseTriangle.points[0].x},${baseTriangle.points[0].y} ${baseTriangle.points[1].x},${baseTriangle.points[1].y} ${baseTriangle.points[2].x},${baseTriangle.points[2].y}`}
                 fill={baseTriangle.color}
-                fillOpacity="0.15"
+                fillOpacity="0.08"
                 stroke={baseTriangle.color}
                 strokeWidth={3 / zoom}
                 strokeLinejoin="round"
@@ -759,14 +759,14 @@ export default function App() {
                       key={`angle-lbl-${vertexIdx}`}
                       x={labelX} 
                       y={labelY} 
-                      fill="#475569" 
+                      fill="#cbd5e1" 
                       fontSize="14" 
                       fontWeight="700"
                       textAnchor="middle"
                       alignmentBaseline="middle"
                       className="font-mono" 
                       style={{ 
-                        textShadow: '0 0 4px white, 0 0 4px white, 0 0 4px white',
+                        textShadow: '0 0 5px #070b10, 0 0 5px #070b10, 0 0 8px #070b10',
                         fontStyle: 'italic'
                       }}
                     >
@@ -810,7 +810,7 @@ export default function App() {
                           const vertexName = ['A', 'B', 'C'][i];
                           
                           // Dynamic vertex coloring logic based on proximity to the central trajectory line
-                          let vColor = isDerived ? tri.color : '#334155';
+                          let vColor = isDerived ? tri.color : '#e2e8f0';
                           let isStartOrFinal = false;
 
                           if (activeTriangles.length > 0) {
@@ -824,11 +824,11 @@ export default function App() {
                               if (Math.abs(lineDx) > 1e-10) {
                                 const yLine = startA.y + (p.x - startA.x) * (lineDy / lineDx);
                                 if (p.y > yLine + 1e-8) vColor = '#2563eb'; // Blue for above the line mathematically
-                                else if (p.y < yLine - 1e-8) vColor = '#0f172a'; // Black for below the line mathematically
-                                else vColor = '#0f172a'; 
+                                else if (p.y < yLine - 1e-8) vColor = '#e5e7eb'; // Light mark for below the line on dark canvas
+                                else vColor = '#e5e7eb'; 
                               } else {
                                 if (p.x < startA.x - 1e-8) vColor = '#2563eb';
-                                else vColor = '#0f172a';
+                                else vColor = '#e5e7eb';
                               }
                             }
                           }
@@ -843,7 +843,7 @@ export default function App() {
                                 fontSize="11" 
                                 fontWeight="700"
                                 className="font-mono tracking-tight" 
-                                style={{ textShadow: '0 0 4px white, 0 0 4px white, 0 0 4px white' }}
+                                style={{ textShadow: '0 0 5px #070b10, 0 0 5px #070b10, 0 0 8px #070b10' }}
                               >
                                 {vertexName}: ({p.x.toFixed(4)}, {p.y.toFixed(4)})
                               </text>
@@ -869,11 +869,11 @@ export default function App() {
 
                           labelsToRender.push(
                             <g key={`elbl-${isDerived ? 'derived-' : ''}${tri.id}-${e}`}>
-                              <circle cx={cx} cy={cy} r={9} fill="white" stroke={isDerived ? tri.color : "#94a3b8"} strokeWidth={1.5} opacity={0.9} />
+                              <circle cx={cx} cy={cy} r={9} fill="#0b1016" stroke={isDerived ? tri.color : "#cbd5e1"} strokeWidth={1.5} opacity={0.95} />
                               <text
                                 x={cx}
                                 y={cy}
-                                fill={isDerived ? tri.color : "#475569"}
+                                fill={isDerived ? tri.color : "#e2e8f0"}
                                 fontSize="10"
                                 fontWeight="800"
                                 textAnchor="middle"
@@ -900,12 +900,12 @@ export default function App() {
         </div>
       </div>
       
-      {/* Light Theme Scrollbar Styling */}
+      {/* Dark Theme Scrollbar Styling */}
       <style>{`
         .custom-scrollbar::-webkit-scrollbar { width: 4px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #64748b; }
       `}</style>
     </div>
   );

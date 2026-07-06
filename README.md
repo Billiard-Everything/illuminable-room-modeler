@@ -1,97 +1,49 @@
-# Illuminable Room Modeler
+# Unfolder
 
-A React + TypeScript simulator that visualizes light ray reflections and billiard trajectories inside a triangular "room." It uses the mathematical "unfolding" technique — reflecting the triangle across each wall it hits — to turn bouncing paths into straight lines through a chain of mirrored triangles.
+A React/Vite workbench for visualizing finite unfolded triangle poolshots. The app
+builds a triangular room, reflects copies of it across sides, and displays either
+a direct ray unfolding or a code-driven unfolding sequence.
+
+This project is exploratory. It helps inspect finite unfoldings related to the
+invisible-point conjecture documented in `PROJECT_WORKING_NOTES.md`; it is not a
+proof-grade exact arithmetic validator.
 
 ## Features
 
-- **Ray Simulator** — Fire a light ray from any vertex at any angle and watch it bounce (via unfolding) up to a configurable number of times, with automatic detection of singularities (when a ray hits exactly back on its starting vertex).
-- **Code Unfolder** — Paste a space-separated numeric sequence (e.g. `3 1 7 2 6 2 8 2 4 2`) to generate a full scripted billiard trajectory, automatically mapped onto the triangle's real geometric angles.
-- **Flexible triangle input** — Define the base triangle by raw (x, y) coordinates or by two angles + base length (Law of Sines).
-- **Interactive canvas** — Pan, zoom, and inspect calculated vertex coordinates for every reflection step.
+- Dark interactive SVG viewer with pan, zoom, fit-to-screen, labels, and side
+  annotations.
+- Triangle input by coordinates or by two angles plus base length.
+- Ray simulator from a selected vertex and angle.
+- Code unfolder for whitespace-separated integer bounce-block counts.
+- Generated side sequence, parsed symbolic sequence, and vertex coordinate logs.
 
-## Tech Stack
+## Development
 
-| Tool | Purpose |
-|---|---|
-| [Vite](https://vitejs.dev) | Dev server & build tool |
-| [React](https://react.dev) + TypeScript | UI framework (`.tsx`) |
-| [Tailwind CSS](https://tailwindcss.com) | Styling |
-| [lucide-react](https://lucide.dev) | Icons |
+Install dependencies:
 
-## Prerequisites
-
-- [Node.js](https://nodejs.org) (v18+) and npm — check with `node -v` and `npm -v`
-- [Git](https://git-scm.com) and a GitHub account
-- [VS Code](https://code.visualstudio.com) (recommended editor)
-
-## Getting Started (Local Development)
-
-1. **Clone the repo**
-   ```bash
-   git clone https://github.com/YOUR_USERNAME/illuminable-room-modeler.git
-   cd illuminable-room-modeler
-   ```
-
-2. **Install dependencies**
-   ```bash
-   npm install
-   ```
-
-3. **Run the dev server**
-   ```bash
-   npm run dev
-   ```
-   Open the URL shown in the terminal (usually `http://localhost:5173`). The app hot-reloads automatically whenever you save a file.
-
-## Project Structure
-
-```
-illuminable-room-modeler/
-├── src/
-│   ├── App.tsx        # Main component — all simulation logic + UI
-│   ├── main.tsx        # React entry point
-│   └── index.css        # Tailwind import
-├── index.html
-├── package.json
-├── vite.config.ts
-└── README.md
+```bash
+npm install
 ```
 
-## Building for Production
+Run locally:
+
+```bash
+npm run dev
+```
+
+Build:
 
 ```bash
 npm run build
 ```
-This outputs an optimized static build into the `dist/` folder.
 
-To preview the production build locally before deploying:
+Lint:
+
 ```bash
-npm run preview
+npm run lint
 ```
 
-## Deploying to Test It Live
+## Project Notes
 
-The easiest free option is **Vercel** or **Netlify**, both of which auto-detect Vite projects.
-
-### Option A: Vercel
-1. Push your repo to GitHub (see Collaboration section below).
-2. Go to [vercel.com](https://vercel.com), sign in with GitHub, click **Add New → Project**.
-3. Select this repository. Vercel auto-detects the Vite framework preset — leave build command as `npm run build` and output directory as `dist`.
-4. Click **Deploy**. You'll get a live URL (e.g. `illuminable-room-modeler.vercel.app`) that updates automatically on every push to `main`.
-
-### Option B: Netlify
-1. Go to [netlify.com](https://netlify.com), sign in with GitHub, click **Add new site → Import an existing project**.
-2. Select this repo. Set build command to `npm run build` and publish directory to `dist`.
-3. Click **Deploy site**.
-
-### Option C: GitHub Pages
-1. Install the deploy helper: `npm install --save-dev gh-pages`
-2. Add to `package.json` scripts: `"deploy": "vite build && gh-pages -d dist"`
-3. Set `base: '/illuminable-room-modeler/'` in `vite.config.ts` (must match your repo name).
-4. Run `npm run deploy`, then enable GitHub Pages in repo Settings → Pages, using the `gh-pages` branch.
-
-## Collaborating
-
-1. Repo owner: go to **Settings → Collaborators → Add people**, invite teammates by GitHub username/email with **Write** access.
-2. Collaborators: accept the email invite, then clone and install as shown above.
-3. Recommended workflow: create a feature branch before editing (`git checkout -b your-feature-name`), push it, and open a Pull Request into `main` instead of committing directly to `main`.
+See `PROJECT_WORKING_NOTES.md` for the read-only project walkthrough, math notes,
+algorithm pseudocode, limitations, and conjecture context.
