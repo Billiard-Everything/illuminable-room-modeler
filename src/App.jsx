@@ -85,11 +85,20 @@ const TOWER_BLACK_ROLE = 'black';
 // Uncolored vertices use yellow because the formal tower-color graph failed to classify them.
 const BAND_VERTEX_COLOR = '#facc15';
 
-// Valid shots use green for the shot vector in ghost mode.
-const VALID_SHOT_COLOR = '#22c55e';
+// Valid ghost shots keep the same guide red used by the live shot line.
+const VALID_SHOT_COLOR = '#e03030';
 
-// Invalid shots use red for the shot vector in ghost mode.
-const INVALID_SHOT_COLOR = '#ef4444';
+// Invalid ghost shots use a lighter, more opaque red to make the mismatch obvious.
+const INVALID_SHOT_COLOR = '#ff6b6b';
+
+// Endpoint dots use a darker red to distinguish them from the line itself.
+const SHOT_ENDPOINT_FILL_COLOR = '#8b0000';
+
+// Vertices that fall below the guide line are rendered in black.
+const SHOT_VERTEX_BELOW_LINE_COLOR = '#000000';
+
+// Vertices above the guide line keep the cyan/blue accent used by the viewer.
+const SHOT_VERTEX_ABOVE_LINE_COLOR = '#1ec8f0';
 
 // The default clearance epsilon is a perpendicular-distance tolerance in math units.
 const DEFAULT_CLEARANCE_EPSILON = 1e-10;
@@ -1655,8 +1664,8 @@ export default function App() {
   const lineLength = shotGeometry.lineLength;
   // Preview mode ghosting activates only for an invalid code-mode shot.
   const isGhostedShot = simulatorMode === 'code' && shotEditMode === SHOT_MODE_PREVIEW && shotClearanceValidation.status === 'invalid';
-  // The shot vector turns green when valid and red when invalid.
-  const shotLineColor = shotClearanceValidation.status === 'valid' ? VALID_SHOT_COLOR : INVALID_SHOT_COLOR;
+  // Ghost-mode shots keep the base guide color when valid and switch to a lighter red when invalid.
+  const shotLineVisualColor = isGhostedShot && shotClearanceValidation.status === 'invalid' ? INVALID_SHOT_COLOR : VALID_SHOT_COLOR;
   // Lookup a rendered point's validation classification without recomputing the scan.
   const getClearancePointValidation = (triId, vertexIdx, symbol) => {
     // Clearance classification applies only to active code-mode shots.
@@ -1667,17 +1676,11 @@ export default function App() {
     return shotClearanceValidation.byOccurrence.get(occurrenceKey) || null;
   };
 
-  // Rendering omits the terminal reflected triangle while keeping it in validation.
-  const visibleActiveTriangles = simulatorMode === 'code' && activeTriangles.length > 1
-    ? activeTriangles.slice(0, -1)
-    : activeTriangles;
-
-  const getTriangleRenderStyle = (tri) => ({
-    color: tri.color,
-    strokeColor: '#000000',
-    fillOpacity: isGhostedShot ? 0.035 : 0.1,
-    strokeOpacity: isGhostedShot ? 0.35 : 1
-  });
+  const getShotVertexRenderColor = (validation, fallbackColor = SHOT_VERTEX_ABOVE_LINE_COLOR) => {
+    if (!validation) return fallbackColor;
+    if (validation.isShotEndpoint) return SHOT_ENDPOINT_FILL_COLOR;
+    return validation.score < 0 ? SHOT_VERTEX_BELOW_LINE_COLOR : fallbackColor;
+  };
 
   const clearShotFeedback = () => {
     // Accepted input changes invalidate the previously displayed region search.
@@ -2372,10 +2375,10 @@ export default function App() {
                   <line
                     x1={startShot.x} y1={startShot.y}
                     x2={finalShot.x} y2={finalShot.y}
-                    stroke={shotLineColor} strokeWidth={2.5 / zoom} strokeDasharray={`${8 / zoom},${8 / zoom}`} strokeLinecap="round" opacity={isGhostedShot ? 0.78 : 1}
+                    stroke={shotLineVisualColor} strokeWidth={2.5 / zoom} strokeDasharray={`${8 / zoom},${8 / zoom}`} strokeLinecap="round" opacity={isGhostedShot ? 0.9 : 1}
                   />
-                  <circle cx={startShot.x} cy={startShot.y} r={5 / zoom} fill={ENDPOINT_VERTEX_COLOR} stroke={shotLineColor} strokeWidth={1.5 / zoom} />
-                  <circle cx={finalShot.x} cy={finalShot.y} r={5 / zoom} fill={ENDPOINT_VERTEX_COLOR} stroke={shotLineColor} strokeWidth={1.5 / zoom} />
+                  <circle cx={startShot.x} cy={startShot.y} r={5 / zoom} fill={SHOT_ENDPOINT_FILL_COLOR} stroke={shotLineVisualColor} strokeWidth={1.5 / zoom} />
+                  <circle cx={finalShot.x} cy={finalShot.y} r={5 / zoom} fill={SHOT_ENDPOINT_FILL_COLOR} stroke={shotLineVisualColor} strokeWidth={1.5 / zoom} />
                 </g>
               )}
             </g>
@@ -2404,6 +2407,7 @@ export default function App() {
                     const cy = toSvgY(p.y);
                     const radius = validation.valid ? 4 : 6;
                     const showLabel = true;
+                    const markerColor = getShotVertexRenderColor(validation);
 
                     markers.push(
                       <g key={`clearance-mark-${key}`}>
@@ -2411,21 +2415,21 @@ export default function App() {
                           cx={cx}
                           cy={cy}
                           r={radius + 2}
-                          fill={validation.ring}
+                          fill={markerColor}
                           opacity={validation.valid ? 0.28 : 0.85}
                         />
                         <circle
                           cx={cx}
                           cy={cy}
                           r={radius}
-                          fill={validation.color}
+                          fill={markerColor}
                           opacity={validation.valid ? 0.82 : 1}
                         />
                         {showLabel && (
                           <text
                             x={cx}
                             y={cy + 0.5}
-                            fill={validation.textColor || (validation.valid ? '#07111f' : '#fff1f2')}
+                            fill={markerColor}
                             fontSize="8"
                             fontWeight="900"
                             textAnchor="middle"
@@ -2532,8 +2536,7 @@ export default function App() {
                             const clearancePointValidation = getClearancePointValidation(tri.id, i, symbol);
                             
                             if (clearancePointValidation) {
-                              vColor = clearancePointValidation.color;
-                              vTextColor = clearancePointValidation.textColor || vColor;
+                              vColor = getShotVertexRenderColor(clearancePointValidation, isDerived ? tri.color : themePalette.baseTriangle);
                               vertexRadius = clearancePointValidation.valid ? vertexRadius : 6;
                             }
                           }
