@@ -988,7 +988,6 @@ const buildPoolshotTowerValidation = ({ simulatorMode, baseTriangle, activeTrian
   };
 
   // Walk every triangle copy in unfolded order.
-  console.log("ALL TRIANGLES");
   for (const tri of allTris) {
     // Check every physical vertex, not only the symbolic fan endpoints.
     for (let vertexIdx = 0; vertexIdx < 3; vertexIdx++) {
@@ -1008,7 +1007,6 @@ const buildPoolshotTowerValidation = ({ simulatorMode, baseTriangle, activeTrian
       const score = point.y - lineY;
       // Shot endpoints are singular endpoints, not interior vertex obstructions.
       const isShotEndpoint = isShotEndpointCoordinate(point, shotGeometry, endpointTolerance);
-      console.log(isShotEndpoint, point, tri.id);
       // Endpoint vertices render red; all others render their formal tower role.
       const vertexColor = isShotEndpoint ? ENDPOINT_VERTEX_COLOR : getTowerRoleColor(roleRecord?.role);
       // Black and red markers need light label text for legibility.
@@ -1094,8 +1092,6 @@ const buildPoolshotTowerValidation = ({ simulatorMode, baseTriangle, activeTrian
       }
     }
   }
-
-  console.log("END");
 
   // Report tower-color contradictions as validation failures.
   for (const conflict of towerColoring.conflicts) {
@@ -2538,7 +2534,7 @@ export default function App() {
                         fontStyle: 'italic'
                       }}
                     >
-                      {angleLabel + ` (${vertexIdx})`}
+                      {angleLabel}
                     </text>
                   );
                 });
