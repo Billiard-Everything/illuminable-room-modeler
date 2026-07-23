@@ -973,12 +973,15 @@ Display precision:
 Angle increment:
 
 1. The `Angle Step` control changes the native stepper increment for Angle A and
-   Angle B.
-2. It defaults to `0.1` degrees.
-3. It does not directly change geometry; it only changes the next value produced
-   by the browser number input when the user increments or decrements an angle.
-4. Constrained mode still validates the candidate value before committing it,
-   regardless of the selected increment.
+   Angle B, and supplies the exact grid step for the valid-angle plot.
+2. `Step Increment` independently controls the native spinner/arrow increment of
+   the `Angle Step` field itself, replacing the former hard-coded `0.0001`.
+3. `Angle Step` defaults to `0.1` degrees and `Step Increment` defaults to
+   `0.0001`; both accept other positive decimal values.
+4. Invalid or incomplete increment text temporarily falls back to its default
+   without overwriting what the user is typing.
+5. Constrained mode still validates candidate angle values before committing
+   them, regardless of the selected increments.
 
 Vertex color logic:
 

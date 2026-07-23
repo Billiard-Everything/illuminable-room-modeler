@@ -117,6 +117,9 @@ const DEFAULT_CLEARANCE_EPSILON = 1e-10;
 // Angle A/B number steppers default to one tenth of a degree.
 const DEFAULT_ANGLE_INCREMENT = 0.1;
 
+// The Angle Step control itself defaults to changing by one ten-thousandth per native step.
+const DEFAULT_ANGLE_STEP_CONTROL_INCREMENT = 0.0001;
+
 // Numeric readouts default to twelve decimal places for precise endpoint/angle inspection.
 const DEFAULT_DISPLAY_DECIMALS = 12;
 
@@ -152,6 +155,14 @@ const EMPTY_CODE_DATA = {
   idxToAngle: { 0: 'x', 1: 'y', 2: 'z' },
   // The reverse symbol-to-physical map is useful for candidate searches.
   angleToIdx: { x: 0, y: 1, z: 2 }
+};
+
+/** Resolves editable native number-input step text to a safe positive value. */
+const resolvePositiveInputStep = (rawValue, fallback) => {
+  // Native step attributes require a finite positive number to behave predictably.
+  const parsed = Number(rawValue);
+  // Invalid typing states retain the documented fallback without rewriting the field.
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 };
 
 // ==========================================
@@ -1386,6 +1397,8 @@ export default function App() {
   const [angleParams, setAngleParams] = useState({ a: 15, b: 50, length: 10 }); 
   // Angle increment controls the native number-stepper amount for Angle A and Angle B.
   const [angleIncrementInput, setAngleIncrementInput] = useState(String(DEFAULT_ANGLE_INCREMENT));
+  // This separate increment controls the native stepper attached to the Angle Step field itself.
+  const [angleStepControlIncrementInput, setAngleStepControlIncrementInput] = useState(String(DEFAULT_ANGLE_STEP_CONTROL_INCREMENT));
   // Coordinate defaults create a right-ish triangle for immediate manual testing.
   const [baseCoordsInput, setBaseCoordsInput] = useState([
     { x: 0, y: 0 },
@@ -1537,11 +1550,14 @@ export default function App() {
   }, [displayPrecisionInput]);
 
   const angleInputStep = useMemo(() => {
-    // Parse the editable step size used by the Angle A/B native number controls.
-    const parsed = Number(angleIncrementInput);
     // Nonpositive or malformed step sizes fall back without mutating what the user typed.
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_ANGLE_INCREMENT;
+    return resolvePositiveInputStep(angleIncrementInput, DEFAULT_ANGLE_INCREMENT);
   }, [angleIncrementInput]);
+
+  const angleStepControlIncrement = useMemo(() => {
+    // Resolve the independently configurable native increment for the Angle Step control.
+    return resolvePositiveInputStep(angleStepControlIncrementInput, DEFAULT_ANGLE_STEP_CONTROL_INCREMENT);
+  }, [angleStepControlIncrementInput]);
 
   const formatFixed = (value) => {
     // Non-finite geometry values should be visible instead of throwing in toFixed().
@@ -2175,10 +2191,22 @@ export default function App() {
                   <input
                     type="number"
                     min="0"
-                    step="0.0001"
+                    step={angleStepControlIncrement}
                     value={angleIncrementInput}
                     onChange={e => setAngleIncrementInput(e.target.value)}
-                    title="Increment for the Angle A/B number steppers, and the exact grid step used by Plot Valid Angle Region (e.g. 1, 0.1, 0.01, 0.0000003)."
+                    title={`Increment for the Angle A/B number steppers and exact plot grid. Its own native step is ${angleStepControlIncrement}.`}
+                    className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2.5 py-1.5 text-sm focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 transition-all"
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-bold text-slate-500 w-16 text-right mr-1">Step Increment</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    value={angleStepControlIncrementInput}
+                    onChange={e => setAngleStepControlIncrementInput(e.target.value)}
+                    title="Native spinner/arrow increment used by the Angle Step field above."
                     className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2.5 py-1.5 text-sm focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 transition-all"
                   />
                 </div>

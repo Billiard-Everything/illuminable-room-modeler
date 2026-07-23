@@ -23,6 +23,7 @@ globalThis.__unfolderMathApi = {
   getSymbolAngleValues,
   getSymbolAngleDegreesFromTriangle,
   reflectPoint,
+  resolvePositiveInputStep,
   unfoldCodeData
 };`);
   const api = globalThis.__unfolderMathApi;
@@ -60,6 +61,14 @@ const buildDefaultCodeData = () => {
   const codeData = api.unfoldCodeData(DEFAULT_CODE, baseTriangle, true);
   return { baseTriangle, codeData };
 };
+
+test('editable native input steps accept a configurable positive increment and safely fall back', () => {
+  assert.equal(api.resolvePositiveInputStep('0.0025', 0.0001), 0.0025);
+  assert.equal(api.resolvePositiveInputStep('0.0000003', 0.0001), 0.0000003);
+  assert.equal(api.resolvePositiveInputStep('', 0.0001), 0.0001);
+  assert.equal(api.resolvePositiveInputStep('0', 0.0001), 0.0001);
+  assert.equal(api.resolvePositiveInputStep('-1', 0.0001), 0.0001);
+});
 
 const validateCandidate = (a, b, referenceData = null) => {
   const baseTriangle = api.buildBaseTriangle('angles', [], { a, b, length: 10 });
