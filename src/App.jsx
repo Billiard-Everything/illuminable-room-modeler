@@ -349,11 +349,8 @@ const unfoldCodeData = (billiardsCode, baseTriangle, enabled = true) => {
     else angles.push(axes.find(a => a !== currAngle && a !== lastAngle));
   }
 
-  // The app-facing convention names the smallest/default physical angle x and the largest z.
-  const displaySymbol = (symbol) => symbol === 'x' ? 'z' : symbol === 'z' ? 'x' : symbol;
-
-  // Pair each numeric run with its relabeled symbolic angle for display and unfolding.
-  const parsedSequence = nums.map((n, i) => ({ count: n, angle: displaySymbol(angles[i]) }));
+  // Pair each numeric run with its derived symbolic angle for display and unfolding.
+  const parsedSequence = nums.map((n, i) => ({ count: n, angle: angles[i] }));
 
   // Track the largest run attached to each symbolic angle.
   const maxBouncesCode = { x: 0, y: 0, z: 0 };
