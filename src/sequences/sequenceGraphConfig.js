@@ -42,15 +42,64 @@ export const colorForSequenceNumber = (number) => (
  * creation index (never reused, even after earlier rows are deleted) — it
  * drives both the default label ("Graph N") and the stable color
  * assignment, so neither shifts when unrelated rows are removed.
+ *
+ * `angleA`/`angleB` are this row's own physical base angles (degrees) —
+ * each row's main-canvas point and graph reference geometry, independent of
+ * every other row's. `draftSequenceText` is the live-typing buffer shown in
+ * the sequence input; `sequenceText` only changes when a draft is
+ * successfully applied (Enter/blur), so mid-typing keystrokes never touch
+ * the graph or main canvas. `validationError` holds the last apply/edit
+ * rejection reason for this row (sequence or angle), cleared on the next
+ * successful apply.
  */
-export const createSequenceRow = ({ number, sequenceText = '', angleStepInput = '0.1' }) => ({
+export const createSequenceRow = ({ number, sequenceText = '', angleStepInput = '0.1', angleA = 15, angleB = 50 }) => ({
   id: `seq-${number}`,
   label: `Graph ${number}`,
   sequenceText,
+  draftSequenceText: sequenceText,
   angleStepInput,
+  angleA,
+  angleB,
   color: colorForSequenceNumber(number),
   visible: true,
+  validationError: null,
 });
+
+/** Whether `hex` is a valid `#rrggbb` color string. */
+export const isValidHexColor = (hex) => typeof hex === 'string' && /^#[0-9a-fA-F]{6}$/.test(hex);
+
+/**
+ * Parses raw sequence-input text into whole-number billiard codes, or
+ * explains in plain English why it can't. Whitespace-tolerant per the
+ * conceptual rule `rawText.trim().split(/\s+/)`: leading/trailing space is
+ * ignored and runs of multiple spaces/tabs/newlines collapse to one
+ * separator, so pasted text with tabs or line breaks parses the same way as
+ * manually-typed single spaces.
+ */
+export const parseSequenceDraftText = (rawText) => {
+  const trimmed = (rawText || '').trim();
+  if (!trimmed) {
+    return { valid: false, title: 'Empty sequence', message: 'The sequence cannot be empty.\nEnter at least one valid code.' };
+  }
+  const tokens = trimmed.split(/\s+/).filter(Boolean);
+  for (const token of tokens) {
+    if (!/^\d+$/.test(token)) {
+      return {
+        valid: false,
+        title: 'Invalid character',
+        message: `The sequence contains an invalid value: "${token}".\nPlease enter whole-number codes separated by spaces, for example:\n3 1 2 4`,
+      };
+    }
+    if (Number(token) <= 0) {
+      return {
+        valid: false,
+        title: 'Invalid code',
+        message: `Code "${token}" is not valid: each code must be a whole number greater than zero.\nExample: 3 1 2 4`,
+      };
+    }
+  }
+  return { valid: true, codes: tokens.map(Number) };
+};
 
 /** Truncates a sequence string for compact legend/row display, keeping the full text available via title/tooltip. */
 export const truncateSequenceText = (text, maxLength = 28) => {

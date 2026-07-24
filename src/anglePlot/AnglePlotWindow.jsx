@@ -174,7 +174,7 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
       return;
     }
 
-    const validateCandidate = buildValidateCandidateForSequenceRef.current(seq.sequenceText);
+    const validateCandidate = buildValidateCandidateForSequenceRef.current(seq.sequenceText, { a: seq.angleA, b: seq.angleB, length: baseLength });
     const exactMode = isExactModeStep(parsed.scale, parsed.stepUnits);
     const startedAt = performance.now();
     setRowResult(seq.id, { status: 'running', error: null, progress: exactMode ? { mode: 'exact', tested: 0, total: 0, found: 0 } : { mode: 'adaptive', cellsChecked: 0, found: 0 } });
@@ -272,7 +272,7 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
     runningIdsRef.current.add(id);
     const startedAt = performance.now();
     setRowResult(id, { status: 'running', progress: { mode: 'exact', tested: 0, total: 0, found: 0 } });
-    const validateCandidate = buildValidateCandidateForSequenceRef.current(seq.sequenceText);
+    const validateCandidate = buildValidateCandidateForSequenceRef.current(seq.sequenceText, { a: seq.angleA, b: seq.angleB, length: baseLength });
     const task = generateAngleRegion({
       validateCandidate, baseLength, scale: pending.scale, stepUnits: pending.stepUnits,
       onProgress: (p) => {
@@ -340,7 +340,7 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
       const nextSnapshot = {};
       for (const seq of sequences) {
         const prevEntry = prevSnapshot[seq.id];
-        nextSnapshot[seq.id] = { sequenceText: seq.sequenceText, angleStepInput: seq.angleStepInput, visible: seq.visible };
+        nextSnapshot[seq.id] = { sequenceText: seq.sequenceText, angleStepInput: seq.angleStepInput, visible: seq.visible, angleA: seq.angleA, angleB: seq.angleB };
 
         if (!seq.visible) {
           cancelSequenceJob(seq.id);
@@ -348,7 +348,7 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
         }
 
         const isNew = !prevEntry;
-        const contentChanged = !isNew && (prevEntry.sequenceText !== seq.sequenceText || prevEntry.angleStepInput !== seq.angleStepInput);
+        const contentChanged = !isNew && (prevEntry.sequenceText !== seq.sequenceText || prevEntry.angleStepInput !== seq.angleStepInput || prevEntry.angleA !== seq.angleA || prevEntry.angleB !== seq.angleB);
         const justBecameVisible = !isNew && !prevEntry.visible;
         const hasCachedResult = !!resultsRef.current[seq.id] && resultsRef.current[seq.id].status === 'done';
 
