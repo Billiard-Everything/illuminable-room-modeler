@@ -5,6 +5,7 @@ import { Maximize, Zap, Settings2, List, Code2, Compass, ChevronRight, Activity,
 // The angle-region plot pop-up lives in its own module (see src/anglePlot) so
 // it can be unit-tested without React and does not bloat this file further.
 import AnglePlotWindow from './anglePlot/AnglePlotWindow.jsx';
+import GraphSetupWindow from './sequences/GraphSetupWindow.jsx';
 // The multi-sequence row list (Desmos-style "+ Add Sequence") is a plain
 // data model shared between the sidebar row list and the graph pop-up, so
 // both stay in sync on id/label/color assignment without duplicating logic.
@@ -516,12 +517,20 @@ const unfoldCodeData = (billiardsCode, baseTriangle, enabled = true) => {
   const angleToIdx = {};
   // idxToAngle maps physical vertex indices back to symbolic labels.
   const idxToAngle = {};
-  // Largest-run symbol goes to smallest physical angle.
-  angleToIdx[syms[0]] = actualAngles[0].idx; idxToAngle[actualAngles[0].idx] = syms[0];
-  // Middle-run symbol goes to middle physical angle.
-  angleToIdx[syms[1]] = actualAngles[1].idx; idxToAngle[actualAngles[1].idx] = syms[1];
-  // Smallest-run symbol goes to largest physical angle.
-  angleToIdx[syms[2]] = actualAngles[2].idx; idxToAngle[actualAngles[2].idx] = syms[2];
+  if (parsedSequence.length === 1) {
+    // One run gives evidence for y only. Ranking the unobserved x/z symbols
+    // can swap x and y for close A/B angles, moving the short unfolding to
+    // the left side. Keep the stable physical convention in this tie case.
+    angleToIdx.x = 0; idxToAngle[0] = 'x';
+    angleToIdx.y = 1; idxToAngle[1] = 'y';
+    angleToIdx.z = 2; idxToAngle[2] = 'z';
+  } else {
+    // Longer codes carry enough run information for the established
+    // largest-run-to-smallest-angle heuristic.
+    angleToIdx[syms[0]] = actualAngles[0].idx; idxToAngle[actualAngles[0].idx] = syms[0];
+    angleToIdx[syms[1]] = actualAngles[1].idx; idxToAngle[actualAngles[1].idx] = syms[1];
+    angleToIdx[syms[2]] = actualAngles[2].idx; idxToAngle[actualAngles[2].idx] = syms[2];
+  }
 
   // Reflected triangle copies emitted by the code unfolding.
   const triangles = [];
@@ -562,12 +571,23 @@ const unfoldCodeData = (billiardsCode, baseTriangle, enabled = true) => {
       const cA = testCentroid(currentTri, edges[0]);
       // Preview the centroid after the second candidate reflection.
       const cB = testCentroid(currentTri, edges[1]);
+      // The first fan fixes the drawing convention. When exactly one first
+      // candidate continues up and right from base A, prefer it; later fans
+      // keep the original forwardness rule and may legitimately cross axes.
+      const baseA = currentTri[0];
+      const firstQuadrantScore = (centroid) => (
+        centroid.x > baseA.x && centroid.y > baseA.y ? 1 : 0
+      );
+      const quadrantScoreA = lastEdge === null ? firstQuadrantScore(cA) : 0;
+      const quadrantScoreB = lastEdge === null ? firstQuadrantScore(cB) : 0;
       // Dot product compares how much candidate A continues the current direction.
       const dotA = (cA.x - currentCentroid.x) * currentDir.x + (cA.y - currentCentroid.y) * currentDir.y;
       // Dot product compares how much candidate B continues the current direction.
       const dotB = (cB.x - currentCentroid.x) * currentDir.x + (cB.y - currentCentroid.y) * currentDir.y;
-      // Pick the more forward candidate.
-      currentEdge = dotA > dotB ? edges[0] : edges[1];
+      // Use the quadrant preference only to break the first-fan ambiguity.
+      currentEdge = quadrantScoreA !== quadrantScoreB
+        ? (quadrantScoreA > quadrantScoreB ? edges[0] : edges[1])
+        : (dotA > dotB ? edges[0] : edges[1]);
     }
 
     // Emit exactly `count` reflected triangles for this symbolic run.
@@ -1596,6 +1616,9 @@ export default function App() {
   const [displayPrecisionInput, setDisplayPrecisionInput] = useState(String(DEFAULT_DISPLAY_DECIMALS));
   // Controls whether the "Valid Angle A-B Region" pop-up is mounted.
   const [isAnglePlotOpen, setIsAnglePlotOpen] = useState(false);
+  // Graph Setup is an optional multi-row editor; it shares the existing row
+  // model and never replaces the sidebar's established active-row workflow.
+  const [isGraphSetupOpen, setIsGraphSetupOpen] = useState(false);
   // Bumped on every "Plot Valid Angle Region" click so an already-open window
   // regenerates and comes to the front instead of a duplicate window opening.
   const [anglePlotRequestId, setAnglePlotRequestId] = useState(0);
@@ -1967,6 +1990,39 @@ export default function App() {
     // surface it instead of doing nothing.
     setIsAnglePlotOpen(true);
     setAnglePlotRequestId(id => id + 1);
+  };
+
+  // The Graph Setup dialog can configure a row before it has a valid code or
+  // complete triangle, states that the live Base Geometry guard correctly
+  // rejects. A completed active graph is instead delegated straight back to
+  // that established guard, preserving Constrained/Ghost behavior exactly.
+  const handleGraphSetupAngleChange = (id, field, value) => {
+    const row = sequences.find(sequence => sequence.id === id);
+    if (!row) return;
+    const candidateParams = {
+      a: field === 'a' ? value : row.angleA,
+      b: field === 'b' ? value : row.angleB,
+      length: baseTriangleLength,
+    };
+    const canUseEstablishedGuard = id === activeSequenceId
+      && !!row.sequenceText.trim()
+      && hasCompleteAngleParams(candidateParams);
+    if (canUseEstablishedGuard) {
+      handleAngleParamChange(field, value);
+      return;
+    }
+    const rowField = field === 'a' ? 'angleA' : 'angleB';
+    setSequences(rows => rows.map(sequence => sequence.id === id
+      ? { ...sequence, [rowField]: value, validationError: null }
+      : sequence));
+    if (id === activeSequenceId) {
+      resetShotConstraintReference();
+    }
+  };
+
+  const handleOpenPlotFromGraphSetup = () => {
+    setIsGraphSetupOpen(false);
+    handleOpenAnglePlot();
   };
 
   // --- SEQUENCE ROW LIST HANDLERS ---
@@ -2467,6 +2523,13 @@ export default function App() {
               <p className="text-[10px] text-slate-500 mb-2 leading-relaxed">
                 Each row is one independent bounce-code sequence with its own Angle Step and graph color. Click a row to make it the active unfolding shown on the canvas.
               </p>
+              <button
+                type="button"
+                onClick={() => setIsGraphSetupOpen(true)}
+                className="mb-3 flex w-full items-center justify-center gap-1.5 rounded-md border border-cyan-300/35 bg-cyan-500/15 px-2.5 py-1.5 text-[11px] font-bold text-cyan-100 transition-colors hover:bg-cyan-500/25"
+              >
+                <Settings2 className="w-3.5 h-3.5" /> Graph Setup
+              </button>
 
               {/* Desmos-style sequence row list. Bounded height + its own
                   scrollbar (not the whole sidebar's) so adding many rows
@@ -3259,6 +3322,29 @@ export default function App() {
           onClose={() => setIsAnglePlotOpen(false)}
           onShowAll={handleShowAllSequences}
           onHideAll={handleHideAllSequences}
+          onEditGraphs={() => setIsGraphSetupOpen(true)}
+        />
+      )}
+
+      {/* One place to configure all plot rows without changing the existing
+          Base Geometry sidebar or the AnglePlotWindow's rendering pipeline. */}
+      {isGraphSetupOpen && (
+        <GraphSetupWindow
+          sequences={sequences}
+          activeSequenceId={activeSequenceId}
+          onAdd={handleAddSequence}
+          onDuplicate={handleDuplicateSequence}
+          onRemove={handleRemoveSequence}
+          onSelect={handleSelectActiveSequence}
+          onToggleVisible={handleToggleSequenceVisible}
+          onColorChange={handleSequenceColorChange}
+          onAngleChange={handleGraphSetupAngleChange}
+          onAngleStepChange={handleSequenceAngleStepChange}
+          onDraftChange={handleSequenceDraftChange}
+          onApplyDraft={handleApplySequenceDraft}
+          onCancelDraft={handleCancelSequenceDraft}
+          onClose={() => setIsGraphSetupOpen(false)}
+          onOpenPlot={handleOpenPlotFromGraphSetup}
         />
       )}
 

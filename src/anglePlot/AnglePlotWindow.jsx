@@ -82,7 +82,7 @@ const MAX_CONCURRENT_SEQUENCE_JOBS = 2;
 
 const emptyRowResult = () => ({ points: [], status: 'idle', mode: null, renderInfo: null, progress: null, error: null });
 
-export default function AnglePlotWindow({ sequences, activeSequenceId, angleParams, baseLength, buildValidateCandidateForSequence, refreshToken, onClose, onShowAll, onHideAll }) {
+export default function AnglePlotWindow({ sequences, activeSequenceId, angleParams, baseLength, buildValidateCandidateForSequence, refreshToken, onClose, onShowAll, onHideAll, onEditGraphs }) {
   const [pos, setPos] = useState({ x: 96, y: 72 });
   const [size, setSize] = useState(DEFAULT_SIZE);
   const dragOffset = useRef(null);
@@ -552,6 +552,9 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
         <button type="button" onClick={onHideAll} title="Hide every sequence from this graph." className={viewButtonClass}>
           <EyeOff className="w-3.5 h-3.5" />
           Hide All
+        </button>
+        <button type="button" onClick={onEditGraphs} title="Open Graph Setup to configure every graph's angles, step, code, color, and visibility." className={viewButtonClass}>
+          Edit Graphs
         </button>
         <button
           type="button"
