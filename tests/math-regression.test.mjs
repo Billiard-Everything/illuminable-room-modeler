@@ -152,6 +152,25 @@ test('default code unfolding has the known symbolic mapping and side path', () =
   assertAlmostEqual(symbolAngles.z, 15, 1e-10, 'symbol angle z');
 });
 
+test('a one-run code keeps y on physical B so close A/B angles unfold to the right', () => {
+  const baseTriangle = api.buildBaseTriangle('angles', [], { a: 15, b: 16, length: 10 });
+  const codeData = api.unfoldCodeData('4', baseTriangle, true);
+  const baseA = baseTriangle.points[0];
+  const firstTriangle = codeData.triangles[0];
+  const finalTriangle = codeData.triangles.at(-1);
+
+  // A single run cannot rank x/z against y, so its physical mapping is fixed
+  // instead of allowing a tied heuristic to exchange the two base labels.
+  assert.deepEqual(codeData.idxToAngle, { 0: 'x', 1: 'y', 2: 'z' });
+  assert.equal(codeData.parsedSequence[0].angle, 'y');
+  assert.equal(firstTriangle.fanVertexIdx, 1);
+  assert.equal(codeData.reflectionEdges[0], 1);
+  assert.ok(firstTriangle.points[0].x > baseA.x, 'first reflected A must move right of base A');
+  assert.ok(firstTriangle.points[0].y > baseA.y, 'first reflected A must move above base A');
+  assert.ok(finalTriangle.points[0].x > baseA.x, 'terminal A must be right of base A');
+  assert.ok(finalTriangle.points[0].y > baseA.y, 'terminal A must be above base A');
+});
+
 test('rendering includes the final reflected triangle instead of treating it as look-ahead geometry', () => {
   const { codeData } = buildDefaultCodeData();
   const renderableTriangles = api.getRenderableActiveTriangles(codeData.triangles);

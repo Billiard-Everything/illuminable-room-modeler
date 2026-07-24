@@ -517,12 +517,20 @@ const unfoldCodeData = (billiardsCode, baseTriangle, enabled = true) => {
   const angleToIdx = {};
   // idxToAngle maps physical vertex indices back to symbolic labels.
   const idxToAngle = {};
-  // Largest-run symbol goes to smallest physical angle.
-  angleToIdx[syms[0]] = actualAngles[0].idx; idxToAngle[actualAngles[0].idx] = syms[0];
-  // Middle-run symbol goes to middle physical angle.
-  angleToIdx[syms[1]] = actualAngles[1].idx; idxToAngle[actualAngles[1].idx] = syms[1];
-  // Smallest-run symbol goes to largest physical angle.
-  angleToIdx[syms[2]] = actualAngles[2].idx; idxToAngle[actualAngles[2].idx] = syms[2];
+  if (parsedSequence.length === 1) {
+    // One run gives evidence for y only. Ranking the unobserved x/z symbols
+    // can swap x and y for close A/B angles, moving the short unfolding to
+    // the left side. Keep the stable physical convention in this tie case.
+    angleToIdx.x = 0; idxToAngle[0] = 'x';
+    angleToIdx.y = 1; idxToAngle[1] = 'y';
+    angleToIdx.z = 2; idxToAngle[2] = 'z';
+  } else {
+    // Longer codes carry enough run information for the established
+    // largest-run-to-smallest-angle heuristic.
+    angleToIdx[syms[0]] = actualAngles[0].idx; idxToAngle[actualAngles[0].idx] = syms[0];
+    angleToIdx[syms[1]] = actualAngles[1].idx; idxToAngle[actualAngles[1].idx] = syms[1];
+    angleToIdx[syms[2]] = actualAngles[2].idx; idxToAngle[actualAngles[2].idx] = syms[2];
+  }
 
   // Reflected triangle copies emitted by the code unfolding.
   const triangles = [];
@@ -563,12 +571,23 @@ const unfoldCodeData = (billiardsCode, baseTriangle, enabled = true) => {
       const cA = testCentroid(currentTri, edges[0]);
       // Preview the centroid after the second candidate reflection.
       const cB = testCentroid(currentTri, edges[1]);
+      // The first fan fixes the drawing convention. When exactly one first
+      // candidate continues up and right from base A, prefer it; later fans
+      // keep the original forwardness rule and may legitimately cross axes.
+      const baseA = currentTri[0];
+      const firstQuadrantScore = (centroid) => (
+        centroid.x > baseA.x && centroid.y > baseA.y ? 1 : 0
+      );
+      const quadrantScoreA = lastEdge === null ? firstQuadrantScore(cA) : 0;
+      const quadrantScoreB = lastEdge === null ? firstQuadrantScore(cB) : 0;
       // Dot product compares how much candidate A continues the current direction.
       const dotA = (cA.x - currentCentroid.x) * currentDir.x + (cA.y - currentCentroid.y) * currentDir.y;
       // Dot product compares how much candidate B continues the current direction.
       const dotB = (cB.x - currentCentroid.x) * currentDir.x + (cB.y - currentCentroid.y) * currentDir.y;
-      // Pick the more forward candidate.
-      currentEdge = dotA > dotB ? edges[0] : edges[1];
+      // Use the quadrant preference only to break the first-fan ambiguity.
+      currentEdge = quadrantScoreA !== quadrantScoreB
+        ? (quadrantScoreA > quadrantScoreB ? edges[0] : edges[1])
+        : (dotA > dotB ? edges[0] : edges[1]);
     }
 
     // Emit exactly `count` reflected triangles for this symbolic run.
@@ -1521,9 +1540,10 @@ export default function App() {
   // genuinely shared across every row — Angle A/B now live per-row (see
   // `sequences` below) so each row can have its own main-canvas point.
   const [baseTriangleLength, setBaseTriangleLength] = useState(10);
-  // Default supplied to new graph rows for the A/B native-spinner increment
-  // and their sampling Angle Step. Each Graph Setup card can subsequently
-  // choose its own A/B increment without changing any geometry calculation.
+  // Increment for the Angle A/B number-stepper arrows, and the default
+  // Angle Step given to newly-added sequences. No longer user-editable (the
+  // visible "A/B Spinner" control was removed as confusing); fixed at its
+  // default rather than left as dead state.
   const angleIncrementInput = String(DEFAULT_ANGLE_INCREMENT);
   // This separate increment controls the native stepper attached to the Angle Step field itself.
   const [angleStepControlIncrementInput, setAngleStepControlIncrementInput] = useState(String(DEFAULT_ANGLE_STEP_CONTROL_INCREMENT));
@@ -1697,10 +1717,9 @@ export default function App() {
   }, [displayPrecisionInput]);
 
   const angleInputStep = useMemo(() => {
-    // The active graph supplies the Base Geometry spinner increment. Invalid
-    // draft text safely uses the existing default without rewriting it.
-    return resolvePositiveInputStep(activeSequence?.angleIncrementInput, DEFAULT_ANGLE_INCREMENT);
-  }, [activeSequence?.angleIncrementInput]);
+    // Nonpositive or malformed step sizes fall back without mutating what the user typed.
+    return resolvePositiveInputStep(angleIncrementInput, DEFAULT_ANGLE_INCREMENT);
+  }, [angleIncrementInput]);
 
   const angleStepControlIncrement = useMemo(() => {
     // Resolve the independently configurable native increment for the Angle Step control.
@@ -2001,13 +2020,6 @@ export default function App() {
     }
   };
 
-  // Angle Increment is presentation-only: it controls each graph's native
-  // Angle A/B spinner arrows and is intentionally separate from Angle Step,
-  // which controls the graph's sampling resolution.
-  const handleSequenceAngleIncrementChange = (id, text) => {
-    setSequences(rows => rows.map(row => row.id === id ? { ...row, angleIncrementInput: text } : row));
-  };
-
   const handleOpenPlotFromGraphSetup = () => {
     setIsGraphSetupOpen(false);
     handleOpenAnglePlot();
@@ -2041,7 +2053,7 @@ export default function App() {
     if (sourceIndex === -1) return;
     const source = sequences[sourceIndex];
     const number = nextSequenceNumberRef.current++;
-    const copy = { ...createSequenceRow({ number, sequenceText: source.sequenceText, angleIncrementInput: source.angleIncrementInput, angleStepInput: source.angleStepInput, angleA: source.angleA, angleB: source.angleB }), visible: source.visible };
+    const copy = { ...createSequenceRow({ number, sequenceText: source.sequenceText, angleStepInput: source.angleStepInput, angleA: source.angleA, angleB: source.angleB }), visible: source.visible };
     const next = [...sequences];
     next.splice(sourceIndex + 1, 0, copy);
     setSequences(relabelSequenceRows(next));
@@ -3327,7 +3339,6 @@ export default function App() {
           onToggleVisible={handleToggleSequenceVisible}
           onColorChange={handleSequenceColorChange}
           onAngleChange={handleGraphSetupAngleChange}
-          onAngleIncrementChange={handleSequenceAngleIncrementChange}
           onAngleStepChange={handleSequenceAngleStepChange}
           onDraftChange={handleSequenceDraftChange}
           onApplyDraft={handleApplySequenceDraft}

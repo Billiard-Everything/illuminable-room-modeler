@@ -16,7 +16,6 @@ export default function GraphSetupWindow({
   onToggleVisible,
   onColorChange,
   onAngleChange,
-  onAngleIncrementChange,
   onAngleStepChange,
   onDraftChange,
   onApplyDraft,
@@ -140,7 +139,7 @@ export default function GraphSetupWindow({
                       <span className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Angle A</span>
                       <input
                         type="number"
-                        step={row.angleIncrementInput || 'any'}
+                        step="0.1"
                         value={row.angleA}
                         onFocus={() => onSelect(row.id)}
                         onChange={event => onAngleChange(row.id, 'a', event.target.value)}
@@ -152,7 +151,7 @@ export default function GraphSetupWindow({
                       <span className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Angle B</span>
                       <input
                         type="number"
-                        step={row.angleIncrementInput || 'any'}
+                        step="0.1"
                         value={row.angleB}
                         onFocus={() => onSelect(row.id)}
                         onChange={event => onAngleChange(row.id, 'b', event.target.value)}
@@ -168,18 +167,6 @@ export default function GraphSetupWindow({
                         value={row.angleStepInput}
                         onChange={event => onAngleStepChange(row.id, event.target.value)}
                         placeholder="0.1"
-                        className="w-full rounded-md border border-white/10 bg-[#080b0f] px-2 py-1.5 font-mono text-xs text-slate-100 outline-none placeholder:text-slate-600 focus:border-cyan-300/60"
-                      />
-                    </label>
-                    <label className="block">
-                      <span className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Angle Increment</span>
-                      <input
-                        type="number"
-                        min="0"
-                        value={row.angleIncrementInput}
-                        onChange={event => onAngleIncrementChange(row.id, event.target.value)}
-                        placeholder="0.1"
-                        title="Changes this graph's Angle A and Angle B spinner-arrow increment only."
                         className="w-full rounded-md border border-white/10 bg-[#080b0f] px-2 py-1.5 font-mono text-xs text-slate-100 outline-none placeholder:text-slate-600 focus:border-cyan-300/60"
                       />
                     </label>

@@ -85,8 +85,7 @@ the cross-file architecture map.
 ### `src/sequences/GraphSetupWindow.jsx`
 
 - Provides a responsive, theme-compatible dialog for editing every graph's
-  angles, A/B spinner increment, angle step, sequence draft, color, and
-  visibility in one place.
+  angles, angle step, sequence draft, color, and visibility in one place.
 - Delegates every mutation to `App.jsx`, preserving the current sequence
   validation, active-row selection, and AnglePlotWindow generation pipeline.
 
