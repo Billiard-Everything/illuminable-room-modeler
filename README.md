@@ -20,6 +20,9 @@ proof-grade exact arithmetic validator.
 - Editable Angle A/B step size for fine or coarse number-stepper perturbations.
 - Ray simulator from a selected vertex and angle.
 - Code unfolder for whitespace-separated integer bounce-block counts.
+- Graph Setup dialog for configuring every plotted graph's angles, A/B spinner
+  increment, angle step, sequence code, color, and visibility without moving
+  between sidebar sections.
 - Constrained mode that rejects angle edits before they invalidate the current code-mode shot.
 - Ghost mode that allows invalid shots, ghosts the unfolding, and colors the shot vector green/red by validity.
 - Finite-poolshot tower validation with formal blue/red vertex roles, an all-vertex y-at-line check, and numeric fan bounds from the code blocks.

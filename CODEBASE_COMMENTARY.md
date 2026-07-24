@@ -79,6 +79,16 @@ the cross-file architecture map.
 - Renders geometry in mathematical coordinates inside a flipped SVG group.
 - Renders labels and validator markers in screen space so text remains readable
   independent of zoom.
+- Opens `GraphSetupWindow` as an additive editor over the existing sequence-row
+  state; it does not duplicate the unfolding or plotting data model.
+
+### `src/sequences/GraphSetupWindow.jsx`
+
+- Provides a responsive, theme-compatible dialog for editing every graph's
+  angles, A/B spinner increment, angle step, sequence draft, color, and
+  visibility in one place.
+- Delegates every mutation to `App.jsx`, preserving the current sequence
+  validation, active-row selection, and AnglePlotWindow generation pipeline.
 
 ### `vite.config.js`
 

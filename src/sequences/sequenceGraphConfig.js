@@ -1,7 +1,8 @@
 // SequenceGraphConfig: one row in the Desmos-style multi-sequence list.
 //
 // Each row is one complete unfolding configuration (a bounce-code sequence
-// plus its own Angle Step and display color) and, when visible, one plotted
+// plus its own Angle A/B spinner increment, Angle Step, and display color)
+// and, when visible, one plotted
 // dataset in the shared "Valid Angle A-B Region" graph. `id` is a stable
 // identity that survives edits/reordering/renaming; `label` is the display
 // name shown in the UI and legend. Keeping them separate means a row's
@@ -57,11 +58,14 @@ export const colorForSequenceNumber = (number) => (
  * reason for this row (sequence or angle), cleared on the next successful
  * apply.
  */
-export const createSequenceRow = ({ number, sequenceText = '', angleStepInput = '0.1', angleA = '', angleB = '' }) => ({
+export const createSequenceRow = ({ number, sequenceText = '', angleIncrementInput = '0.1', angleStepInput = '0.1', angleA = '', angleB = '' }) => ({
   id: `seq-${number}`,
   label: `Graph ${number}`,
   sequenceText,
   draftSequenceText: sequenceText,
+  // This affects only the native Angle A/B spinner arrows for this graph;
+  // graph sampling continues to use the distinct `angleStepInput` value.
+  angleIncrementInput,
   angleStepInput,
   angleA,
   angleB,

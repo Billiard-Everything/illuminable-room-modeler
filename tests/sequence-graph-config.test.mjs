@@ -25,9 +25,10 @@ test('createSequenceRow builds a stable id/label pair from the creation number',
   assert.equal(row.visible, true);
 });
 
-test('createSequenceRow defaults to an empty sequence and a usable Angle Step', () => {
+test('createSequenceRow defaults to an empty sequence and usable graph-input increments', () => {
   const row = createSequenceRow({ number: 1 });
   assert.equal(row.sequenceText, '');
+  assert.equal(row.angleIncrementInput, '0.1');
   assert.equal(row.angleStepInput, '0.1');
 });
 

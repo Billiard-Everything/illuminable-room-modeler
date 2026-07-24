@@ -5,6 +5,7 @@ import { Maximize, Zap, Settings2, List, Code2, Compass, ChevronRight, Activity,
 // The angle-region plot pop-up lives in its own module (see src/anglePlot) so
 // it can be unit-tested without React and does not bloat this file further.
 import AnglePlotWindow from './anglePlot/AnglePlotWindow.jsx';
+import GraphSetupWindow from './sequences/GraphSetupWindow.jsx';
 // The multi-sequence row list (Desmos-style "+ Add Sequence") is a plain
 // data model shared between the sidebar row list and the graph pop-up, so
 // both stay in sync on id/label/color assignment without duplicating logic.
@@ -1520,10 +1521,9 @@ export default function App() {
   // genuinely shared across every row — Angle A/B now live per-row (see
   // `sequences` below) so each row can have its own main-canvas point.
   const [baseTriangleLength, setBaseTriangleLength] = useState(10);
-  // Increment for the Angle A/B number-stepper arrows, and the default
-  // Angle Step given to newly-added sequences. No longer user-editable (the
-  // visible "A/B Spinner" control was removed as confusing); fixed at its
-  // default rather than left as dead state.
+  // Default supplied to new graph rows for the A/B native-spinner increment
+  // and their sampling Angle Step. Each Graph Setup card can subsequently
+  // choose its own A/B increment without changing any geometry calculation.
   const angleIncrementInput = String(DEFAULT_ANGLE_INCREMENT);
   // This separate increment controls the native stepper attached to the Angle Step field itself.
   const [angleStepControlIncrementInput, setAngleStepControlIncrementInput] = useState(String(DEFAULT_ANGLE_STEP_CONTROL_INCREMENT));
@@ -1596,6 +1596,9 @@ export default function App() {
   const [displayPrecisionInput, setDisplayPrecisionInput] = useState(String(DEFAULT_DISPLAY_DECIMALS));
   // Controls whether the "Valid Angle A-B Region" pop-up is mounted.
   const [isAnglePlotOpen, setIsAnglePlotOpen] = useState(false);
+  // Graph Setup is an optional multi-row editor; it shares the existing row
+  // model and never replaces the sidebar's established active-row workflow.
+  const [isGraphSetupOpen, setIsGraphSetupOpen] = useState(false);
   // Bumped on every "Plot Valid Angle Region" click so an already-open window
   // regenerates and comes to the front instead of a duplicate window opening.
   const [anglePlotRequestId, setAnglePlotRequestId] = useState(0);
@@ -1694,9 +1697,10 @@ export default function App() {
   }, [displayPrecisionInput]);
 
   const angleInputStep = useMemo(() => {
-    // Nonpositive or malformed step sizes fall back without mutating what the user typed.
-    return resolvePositiveInputStep(angleIncrementInput, DEFAULT_ANGLE_INCREMENT);
-  }, [angleIncrementInput]);
+    // The active graph supplies the Base Geometry spinner increment. Invalid
+    // draft text safely uses the existing default without rewriting it.
+    return resolvePositiveInputStep(activeSequence?.angleIncrementInput, DEFAULT_ANGLE_INCREMENT);
+  }, [activeSequence?.angleIncrementInput]);
 
   const angleStepControlIncrement = useMemo(() => {
     // Resolve the independently configurable native increment for the Angle Step control.
@@ -1969,6 +1973,46 @@ export default function App() {
     setAnglePlotRequestId(id => id + 1);
   };
 
+  // The Graph Setup dialog can configure a row before it has a valid code or
+  // complete triangle, states that the live Base Geometry guard correctly
+  // rejects. A completed active graph is instead delegated straight back to
+  // that established guard, preserving Constrained/Ghost behavior exactly.
+  const handleGraphSetupAngleChange = (id, field, value) => {
+    const row = sequences.find(sequence => sequence.id === id);
+    if (!row) return;
+    const candidateParams = {
+      a: field === 'a' ? value : row.angleA,
+      b: field === 'b' ? value : row.angleB,
+      length: baseTriangleLength,
+    };
+    const canUseEstablishedGuard = id === activeSequenceId
+      && !!row.sequenceText.trim()
+      && hasCompleteAngleParams(candidateParams);
+    if (canUseEstablishedGuard) {
+      handleAngleParamChange(field, value);
+      return;
+    }
+    const rowField = field === 'a' ? 'angleA' : 'angleB';
+    setSequences(rows => rows.map(sequence => sequence.id === id
+      ? { ...sequence, [rowField]: value, validationError: null }
+      : sequence));
+    if (id === activeSequenceId) {
+      resetShotConstraintReference();
+    }
+  };
+
+  // Angle Increment is presentation-only: it controls each graph's native
+  // Angle A/B spinner arrows and is intentionally separate from Angle Step,
+  // which controls the graph's sampling resolution.
+  const handleSequenceAngleIncrementChange = (id, text) => {
+    setSequences(rows => rows.map(row => row.id === id ? { ...row, angleIncrementInput: text } : row));
+  };
+
+  const handleOpenPlotFromGraphSetup = () => {
+    setIsGraphSetupOpen(false);
+    handleOpenAnglePlot();
+  };
+
   // --- SEQUENCE ROW LIST HANDLERS ---
   // "+ Add Sequence": appends a new, empty, visible row and makes it active
   // (matches "click a row to edit it" — a freshly added row is the one the
@@ -1997,7 +2041,7 @@ export default function App() {
     if (sourceIndex === -1) return;
     const source = sequences[sourceIndex];
     const number = nextSequenceNumberRef.current++;
-    const copy = { ...createSequenceRow({ number, sequenceText: source.sequenceText, angleStepInput: source.angleStepInput, angleA: source.angleA, angleB: source.angleB }), visible: source.visible };
+    const copy = { ...createSequenceRow({ number, sequenceText: source.sequenceText, angleIncrementInput: source.angleIncrementInput, angleStepInput: source.angleStepInput, angleA: source.angleA, angleB: source.angleB }), visible: source.visible };
     const next = [...sequences];
     next.splice(sourceIndex + 1, 0, copy);
     setSequences(relabelSequenceRows(next));
@@ -2467,6 +2511,13 @@ export default function App() {
               <p className="text-[10px] text-slate-500 mb-2 leading-relaxed">
                 Each row is one independent bounce-code sequence with its own Angle Step and graph color. Click a row to make it the active unfolding shown on the canvas.
               </p>
+              <button
+                type="button"
+                onClick={() => setIsGraphSetupOpen(true)}
+                className="mb-3 flex w-full items-center justify-center gap-1.5 rounded-md border border-cyan-300/35 bg-cyan-500/15 px-2.5 py-1.5 text-[11px] font-bold text-cyan-100 transition-colors hover:bg-cyan-500/25"
+              >
+                <Settings2 className="w-3.5 h-3.5" /> Graph Setup
+              </button>
 
               {/* Desmos-style sequence row list. Bounded height + its own
                   scrollbar (not the whole sidebar's) so adding many rows
@@ -3259,6 +3310,30 @@ export default function App() {
           onClose={() => setIsAnglePlotOpen(false)}
           onShowAll={handleShowAllSequences}
           onHideAll={handleHideAllSequences}
+          onEditGraphs={() => setIsGraphSetupOpen(true)}
+        />
+      )}
+
+      {/* One place to configure all plot rows without changing the existing
+          Base Geometry sidebar or the AnglePlotWindow's rendering pipeline. */}
+      {isGraphSetupOpen && (
+        <GraphSetupWindow
+          sequences={sequences}
+          activeSequenceId={activeSequenceId}
+          onAdd={handleAddSequence}
+          onDuplicate={handleDuplicateSequence}
+          onRemove={handleRemoveSequence}
+          onSelect={handleSelectActiveSequence}
+          onToggleVisible={handleToggleSequenceVisible}
+          onColorChange={handleSequenceColorChange}
+          onAngleChange={handleGraphSetupAngleChange}
+          onAngleIncrementChange={handleSequenceAngleIncrementChange}
+          onAngleStepChange={handleSequenceAngleStepChange}
+          onDraftChange={handleSequenceDraftChange}
+          onApplyDraft={handleApplySequenceDraft}
+          onCancelDraft={handleCancelSequenceDraft}
+          onClose={() => setIsGraphSetupOpen(false)}
+          onOpenPlot={handleOpenPlotFromGraphSetup}
         />
       )}
 

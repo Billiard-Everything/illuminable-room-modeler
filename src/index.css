@@ -137,6 +137,29 @@ button {
   outline-offset: 2px;
 }
 
+/* Graph Setup is also used over the light workbench. A semantic class keeps
+   its primary creation control legible instead of relying on dark-only
+   Tailwind foregrounds. */
+.graph-setup-add-button {
+  border: 1px solid color-mix(in srgb, #22d3ee 45%, var(--border-color));
+  background: color-mix(in srgb, #22d3ee 12%, var(--control-bg));
+  color: #0e7490;
+}
+
+.graph-setup-add-button:hover {
+  border-color: #0891b2;
+  background: color-mix(in srgb, #22d3ee 20%, var(--control-hover-bg));
+  color: #155e75;
+}
+
+.app-theme-dark .graph-setup-add-button {
+  color: #a5f3fc;
+}
+
+.app-theme-dark .graph-setup-add-button:hover {
+  color: #cffafe;
+}
+
 .app-theme-light {
   background-color: var(--app-bg);
   color: var(--text-primary);
