@@ -55,3 +55,7 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5
+        with:
+          # GitHub Pages occasionally remains in updating_pages beyond the
+          # action's 10-minute default; allow more time before failing.
+          timeout: 1800000
