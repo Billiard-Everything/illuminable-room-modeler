@@ -8,7 +8,7 @@ import AnglePlotWindow from './anglePlot/AnglePlotWindow.jsx';
 // The multi-sequence row list (Desmos-style "+ Add Sequence") is a plain
 // data model shared between the sidebar row list and the graph pop-up, so
 // both stay in sync on id/label/color assignment without duplicating logic.
-import { createSequenceRow, isValidHexColor, parseSequenceDraftText } from './sequences/sequenceGraphConfig.js';
+import { createSequenceRow, relabelSequenceRows, isValidHexColor, parseSequenceDraftText } from './sequences/sequenceGraphConfig.js';
 // Per-row Angle Step validation/mode reuses the exact same parser the graph
 // itself uses, so a row's "Exact"/"Adaptive" badge never disagrees with
 // what AnglePlotWindow actually does with that same text.
@@ -554,7 +554,7 @@ const getShotGeometry = (baseTriangle, activeTriangles, labelsMap) => {
   return { shotVertexIdx, shotSymbol, startShot, finalShot, lineDx, lineDy, lineLength };
 };
 
-/** Returns a positive y-coordinate tolerance for direct line-side checks. */
+/** Returns a positive y-coordinate tolerance for direcdt line-side checks. */
 const getLineYTolerance = (clearanceEpsilon) => {
   // Invalid or negative epsilon values are clamped to the documented default.
   const safeEpsilon = Number.isFinite(clearanceEpsilon) && clearanceEpsilon >= 0 ? clearanceEpsilon : DEFAULT_CLEARANCE_EPSILON;
@@ -1948,7 +1948,7 @@ export default function App() {
   const handleAddSequence = () => {
     const number = nextSequenceNumberRef.current++;
     const newRow = createSequenceRow({ number, angleStepInput: angleIncrementInput });
-    setSequences(rows => [...rows, newRow]);
+    setSequences(rows => relabelSequenceRows([...rows, newRow]));
     setActiveSequenceId(newRow.id);
   };
 
@@ -1972,7 +1972,7 @@ export default function App() {
     const copy = { ...createSequenceRow({ number, sequenceText: source.sequenceText, angleStepInput: source.angleStepInput, angleA: source.angleA, angleB: source.angleB }), visible: source.visible };
     const next = [...sequences];
     next.splice(sourceIndex + 1, 0, copy);
-    setSequences(next);
+    setSequences(relabelSequenceRows(next));
     setActiveSequenceId(copy.id);
   };
 
@@ -1987,9 +1987,11 @@ export default function App() {
     const index = sequences.findIndex(row => row.id === id);
     if (index === -1) return;
     const remaining = sequences.filter(row => row.id !== id);
-    const nextRows = remaining.length > 0
-      ? remaining
-      : [createSequenceRow({ number: nextSequenceNumberRef.current++, angleStepInput: angleIncrementInput })];
+    const nextRows = relabelSequenceRows(
+      remaining.length > 0
+        ? remaining
+        : [createSequenceRow({ number: nextSequenceNumberRef.current++, angleStepInput: angleIncrementInput })]
+    );
     setSequences(nextRows);
     if (activeSequenceId === id) {
       const fallback = remaining[index] || remaining[index - 1] || nextRows[0];
@@ -2287,23 +2289,24 @@ export default function App() {
             ) : (
               <div className="space-y-2.5">
                 <div className="flex items-center gap-2">
-                  <span className="text-[11px] font-bold text-slate-500 w-16 text-right mr-1">Base Length</span>
-                  <input type="number" step="0.1" value={angleParams.length} onChange={e => handleAngleParamChange('length', e.target.value)} className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2.5 py-1.5 text-sm focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 transition-all" />
-                </div>
-                <div className="flex items-center gap-2">
                   <span className="text-[11px] font-bold text-slate-500 w-16 text-right mr-1">Angle A</span>
                   <div className="relative w-full">
-                    <input type="number" step={angleInputStep} value={angleParams.a} onChange={e => handleAngleParamChange('a', e.target.value)} className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2.5 py-1.5 text-sm focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 transition-all pr-6" />
+                    <input type="number" step={angleInputStep} value={angleParams.a} onChange={e => handleAngleParamChange('a', e.target.value)} placeholder="Enter Angle A" className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2.5 py-1.5 text-sm focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 placeholder:text-slate-600 placeholder:text-xs transition-all pr-6" />
                     <span className="absolute right-2 top-1.5 text-slate-500 font-mono text-xs">&deg;</span>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="text-[11px] font-bold text-slate-500 w-16 text-right mr-1">Angle B</span>
                   <div className="relative w-full">
-                    <input type="number" step={angleInputStep} value={angleParams.b} onChange={e => handleAngleParamChange('b', e.target.value)} className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2.5 py-1.5 text-sm focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 transition-all pr-6" />
+                    <input type="number" step={angleInputStep} value={angleParams.b} onChange={e => handleAngleParamChange('b', e.target.value)} placeholder="Enter Angle B" className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2.5 py-1.5 text-sm focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 placeholder:text-slate-600 placeholder:text-xs transition-all pr-6" />
                     <span className="absolute right-2 top-1.5 text-slate-500 font-mono text-xs">&deg;</span>
                   </div>
                 </div>
+                {(activeSequence?.angleA === '' || activeSequence?.angleB === '') && (
+                  <div className="text-[10px] text-amber-800 -mt-1 pl-16">
+                    Enter Angle A and Angle B for this sequence to unfold it.
+                  </div>
+                )}
                 <div className="flex items-center gap-2">
                   <span className="text-[11px] font-bold text-slate-500 w-16 text-right mr-1">Angle Step</span>
                   <input
@@ -2330,6 +2333,10 @@ export default function App() {
                     title="Native spinner/arrow increment used by the Angle Step field above."
                     className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2.5 py-1.5 text-sm focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 transition-all"
                   />
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-bold text-slate-500 w-16 text-right mr-1">Base Length</span>
+                  <input type="number" step="0.1" value={angleParams.length} onChange={e => handleAngleParamChange('length', e.target.value)} className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2.5 py-1.5 text-sm focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 transition-all" />
                 </div>
                 {/* The old "A/B Spinner" field (angleIncrementInput) is no
                     longer shown — it was a confusing extra control. Its
@@ -2443,10 +2450,15 @@ export default function App() {
                   const parsedStep = parseAngleStep(row.angleStepInput);
                   const modeLabel = parsedStep.valid ? (isExactModeStep(parsedStep.scale, parsedStep.stepUnits) ? 'Exact' : 'Adaptive') : null;
                   const isDirty = row.draftSequenceText !== row.sequenceText;
+                  // A sequence code is meaningless without a base triangle,
+                  // so typing is blocked entirely until this row's own
+                  // Angle A and B are both set — see the sequence input below.
+                  const anglesIncomplete = row.angleA === '' || row.angleB === '';
                   // Row status: Hidden/Invalid take priority over the plain
                   // "Editing.../Ready" distinction so a bad edit is never
                   // masked by the fact that it's also mid-typing.
                   const rowStatus = !row.visible ? 'Hidden'
+                    : anglesIncomplete ? 'Needs angles'
                     : row.validationError ? (/angle/i.test(row.validationError) ? 'Invalid angles' : 'Invalid sequence')
                     : isDirty ? 'Editing…'
                     : 'Ready';
@@ -2508,24 +2520,43 @@ export default function App() {
                       </div>
                       {/* Full-width sequence field on its own line so long
                           codes are actually readable instead of clipped
-                          beside four other controls. */}
+                          beside four other controls. Kept `readOnly` (not
+                          `disabled`) while angles are incomplete so a click
+                          still fires and can explain why, instead of the
+                          browser silently swallowing it. */}
                       <input
                         type="text"
                         ref={el => { sequenceInputRefsRef.current[row.id] = el; }}
                         value={row.draftSequenceText}
+                        readOnly={anglesIncomplete}
                         onChange={e => handleSequenceDraftChange(row.id, e.target.value)}
-                        onClick={e => e.stopPropagation()}
+                        onMouseDown={e => {
+                          if (!anglesIncomplete) { e.stopPropagation(); return; }
+                          e.preventDefault();
+                          e.stopPropagation();
+                          handleSelectActiveSequence(row.id);
+                          setErrorModal({
+                            title: 'Enter Angle A and Angle B first',
+                            sections: [
+                              { heading: 'Problem', text: `${row.label} does not have Angle A and Angle B set yet, so it has no base triangle to unfold a code against.` },
+                              { heading: 'How to fix it', text: `${row.label} is now the active row — enter Angle A and Angle B in the Base Geometry panel above. Once both are set, you can type this sequence's code.` },
+                            ],
+                            focusId: null,
+                          });
+                        }}
                         onFocus={() => handleSelectActiveSequence(row.id)}
                         onKeyDown={e => {
                           e.stopPropagation();
+                          if (anglesIncomplete) { e.preventDefault(); return; }
                           if (e.key === 'Enter') { e.preventDefault(); handleApplySequenceDraft(row.id); }
                           else if (e.key === 'Escape') { e.preventDefault(); handleCancelSequenceDraft(row.id); e.currentTarget.blur(); }
                         }}
                         onBlur={() => handleApplySequenceDraft(row.id)}
-                        placeholder="e.g. 1 5 16 5 1 2 3 6"
+                        placeholder={anglesIncomplete ? 'Enter Angle A/B above first' : 'e.g. 1 5 16 5 1 2 3 6'}
                         aria-label={`${row.label} sequence text`}
-                        title="Type freely, including spaces. Press Enter to apply, Escape to discard the edit."
-                        className="mt-1.5 w-full bg-[#080b0f] border border-white/10 rounded px-2 py-1 text-[11px] font-mono text-slate-100 outline-none placeholder:text-slate-600 focus:border-cyan-300/50"
+                        aria-disabled={anglesIncomplete}
+                        title={anglesIncomplete ? `Set ${row.label}'s Angle A and Angle B above before entering a code.` : 'Type freely, including spaces. Press Enter to apply, Escape to discard the edit.'}
+                        className={`mt-1.5 w-full bg-[#080b0f] border rounded px-2 py-1 text-[11px] font-mono outline-none placeholder:text-slate-600 ${anglesIncomplete ? 'border-white/5 text-slate-600 cursor-not-allowed' : 'border-white/10 text-slate-100 focus:border-cyan-300/50'}`}
                       />
                       {/* Read-only: this sequence's own A/B/Step belong to it
                           in the data model, but the main controls above are
@@ -2537,11 +2568,11 @@ export default function App() {
                         className="flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5 mt-1.5 font-mono"
                         title="Select this row and use the main controls above to change these."
                       >
-                        <span className={isActive ? 'text-cyan-200' : 'text-slate-300'}>
-                          <span className="text-sm font-bold">A {row.angleA}&deg;</span>
+                        <span className={row.angleA === '' ? 'text-amber-800' : isActive ? 'text-cyan-200' : 'text-slate-300'}>
+                          <span className="text-sm font-bold">A {row.angleA === '' ? '(not set)' : `${row.angleA}°`}</span>
                         </span>
-                        <span className={isActive ? 'text-cyan-200' : 'text-slate-300'}>
-                          <span className="text-sm font-bold">B {row.angleB}&deg;</span>
+                        <span className={row.angleB === '' ? 'text-amber-800' : isActive ? 'text-cyan-200' : 'text-slate-300'}>
+                          <span className="text-sm font-bold">B {row.angleB === '' ? '(not set)' : `${row.angleB}°`}</span>
                         </span>
                         <span className="text-[11px] text-slate-500">
                           Step {row.angleStepInput}{modeLabel ? ` (${modeLabel})` : ''}
@@ -3200,7 +3231,6 @@ export default function App() {
           onClose={() => setIsAnglePlotOpen(false)}
           onShowAll={handleShowAllSequences}
           onHideAll={handleHideAllSequences}
-          theme={theme}
         />
       )}
 

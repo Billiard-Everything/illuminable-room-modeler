@@ -76,6 +76,29 @@ const OVERLAP_ALPHA = 0.72;
 const DEFAULT_ZOOM = 6;
 const DEFAULT_PAN = { a: 45, b: 45 };
 
+// Neither axis has any meaning outside [0, 90]: A and B are physical
+// triangle angles in degrees, so negative values and anything past 90 are
+// never valid regardless of zoom/pan — panning/zooming can't scroll the
+// view past these edges.
+const AXIS_DOMAIN_MIN = 0;
+const AXIS_DOMAIN_MAX = 90;
+
+// Clamps one axis's pan center so the viewport's own edges never cross the
+// domain bounds above. If the whole domain already fits within the
+// viewport (zoomed out far enough that halfSpan alone covers it), centers
+// on the domain's midpoint instead of letting the view drift to one side.
+const clampPanAxis = (center, zoomPxPerUnit, viewportPx) => {
+  const halfSpan = (viewportPx / 2) / zoomPxPerUnit;
+  const domainSpan = AXIS_DOMAIN_MAX - AXIS_DOMAIN_MIN;
+  if (domainSpan <= halfSpan * 2) return (AXIS_DOMAIN_MIN + AXIS_DOMAIN_MAX) / 2;
+  return Math.max(AXIS_DOMAIN_MIN + halfSpan, Math.min(center, AXIS_DOMAIN_MAX - halfSpan));
+};
+
+const clampPanToDomain = (candidatePan, zoomValue, width, height) => ({
+  a: clampPanAxis(candidatePan.a, zoomValue, width),
+  b: clampPanAxis(candidatePan.b, zoomValue, height),
+});
+
 // zoomLevel is always *derived* from `zoom` (zoom / DEFAULT_ZOOM), never
 // stored independently, so it can never disagree with the actual visible
 // bounds. Exported for diagnostics/tests.
@@ -85,10 +108,19 @@ export const MIN_ZOOM_LEVEL = MIN_ZOOM / DEFAULT_ZOOM;
 // (THEME_PALETTES in App.jsx) so the two canvases stay visually consistent
 // instead of this one always rendering dark regardless of the app's theme
 // toggle.
-const CANVAS_PALETTES = {
-  light: { background: '#f8fafc', gridLine: 'rgba(15,23,42,0.08)', gridAxis: 'rgba(8,145,178,0.45)', tickText: '#64748b' },
-  dark: { background: '#070b10', gridLine: 'rgba(255,255,255,0.08)', gridAxis: 'rgba(56,189,248,0.45)', tickText: '#64748b' },
-};
+// This plot always renders as a plain white box — background, axes, the
+// domain-box border, gridlines, and tick text are all fixed regardless of
+// the app's light/dark theme toggle (unlike the main triangle canvas), so
+// there is only one palette rather than per-theme variants.
+const CANVAS_PALETTE = { gridLine: 'rgba(15,23,42,0.08)', gridAxis: '#000000', tickText: '#64748b' };
+
+// The two straight edges of the triangle-angle domain (A < B and A + B <=
+// 90 already bound every plotted region) drawn as fixed black guide lines,
+// same color as the axes, with light high-contrast labels — requested as
+// permanent visual reference rather than something toggled per series.
+const REFERENCE_LINE_COLOR = '#000000';
+const REFERENCE_LABEL_COLOR = '#f8fafc';
+const REFERENCE_LABEL_HALO_COLOR = 'rgba(0,0,0,0.65)';
 
 const niceGridStepDegrees = (zoom) => {
   // Finer grid spacing as the user zooms in, mirroring the main canvas's tiering.
@@ -167,8 +199,8 @@ const pickRenderMode = (projectedSpacingPx) => {
 // AnglePlotWindow. `gridStepDegrees` (per series) picks that series' own
 // level-of-detail draw mode; it is never used to decide what to generate
 // (that's AnglePlotWindow's job).
-const AnglePlotPanel = forwardRef(function AnglePlotPanel({ series, currentPoint, theme, isLocked, onViewChange }, ref) {
-  const palette = CANVAS_PALETTES[theme] || CANVAS_PALETTES.dark;
+const AnglePlotPanel = forwardRef(function AnglePlotPanel({ series, currentPoint, isLocked, onViewChange }, ref) {
+  const palette = CANVAS_PALETTE;
   const containerRef = useRef(null);
   const canvasRef = useRef(null);
   const [size, setSize] = useState({ width: 600, height: 420 });
@@ -220,7 +252,7 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ series, currentPoint
     setAppliedSizeSignature(sizeSignature);
     const fit = computeFitView(allPoints, currentPoint, size.width, size.height, maxZoom);
     setZoom(fit.zoom);
-    setPan(fit.pan);
+    setPan(clampPanToDomain(fit.pan, fit.zoom, size.width, size.height));
   }
 
   const toScreenX = useCallback((a) => size.width / 2 + (a - pan.a) * zoom, [size.width, pan.a, zoom]);
@@ -233,19 +265,29 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ series, currentPoint
   // all four here too, as a second line of defense beyond the toolbar
   // buttons themselves being disabled while locked.
   useImperativeHandle(ref, () => ({
-    zoomIn: () => { if (!isLocked) setZoom((z) => clampZoom(z * WHEEL_ZOOM_FACTOR)); },
-    zoomOut: () => { if (!isLocked) setZoom((z) => clampZoom(z / WHEEL_ZOOM_FACTOR)); },
+    zoomIn: () => {
+      if (isLocked) return;
+      const nextZoom = clampZoom(zoom * WHEEL_ZOOM_FACTOR);
+      setZoom(nextZoom);
+      setPan((prevPan) => clampPanToDomain(prevPan, nextZoom, size.width, size.height));
+    },
+    zoomOut: () => {
+      if (isLocked) return;
+      const nextZoom = clampZoom(zoom / WHEEL_ZOOM_FACTOR);
+      setZoom(nextZoom);
+      setPan((prevPan) => clampPanToDomain(prevPan, nextZoom, size.width, size.height));
+    },
     fitToPoints: () => {
       if (isLocked) return;
       // Empty-graph state: nothing visible to fit to, fall back to the default overview instead of erroring.
       const fit = computeFitView(allPoints, currentPoint, size.width, size.height, maxZoom);
       setZoom(fit.zoom);
-      setPan(fit.pan);
+      setPan(clampPanToDomain(fit.pan, fit.zoom, size.width, size.height));
     },
     resetToDefaultView: () => {
       if (isLocked) return;
       setZoom(DEFAULT_ZOOM);
-      setPan(DEFAULT_PAN);
+      setPan(clampPanToDomain(DEFAULT_PAN, DEFAULT_ZOOM, size.width, size.height));
     },
     // The data-space rectangle currently visible in the canvas, used by
     // AnglePlotWindow's adaptive renderer so it only ever considers points
@@ -256,7 +298,7 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ series, currentPoint
       minB: toDataB(size.height),
       maxB: toDataB(0),
     }),
-  }), [isLocked, allPoints, currentPoint, size, maxZoom, clampZoom, toDataA, toDataB]);
+  }), [isLocked, allPoints, currentPoint, size, maxZoom, clampZoom, zoom, toDataA, toDataB]);
 
   // Report every zoom/pan/size change (including the very first one, once
   // the real measured canvas size is known) so AnglePlotWindow can debounce
@@ -294,39 +336,60 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ series, currentPoint
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, size.width, size.height);
 
-    // Background
-    ctx.fillStyle = palette.background;
+    // Background: always plain white, regardless of app theme — this graph
+    // reads as one clean bounded box (A and B in [0, 90]) rather than
+    // matching the main triangle canvas's dark/light toggle.
+    ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, size.width, size.height);
 
-    // Grid lines + tick labels, precise enough to represent the current step.
+    // Grid lines + tick labels, restricted to the domain box: neither axis
+    // has meaning outside [0, 90] (see clampPanToDomain), so nothing is
+    // drawn past it — no negative axis, no ticks/labels beyond 90. Any
+    // margin from being zoomed out past the box is left plain white.
     const step = niceGridStepDegrees(zoom);
-    const minA = toDataA(0);
-    const maxA = toDataA(size.width);
-    const minB = toDataB(size.height);
-    const maxB = toDataB(0);
+    const minA = Math.max(toDataA(0), AXIS_DOMAIN_MIN);
+    const maxA = Math.min(toDataA(size.width), AXIS_DOMAIN_MAX);
+    const minB = Math.max(toDataB(size.height), AXIS_DOMAIN_MIN);
+    const maxB = Math.min(toDataB(0), AXIS_DOMAIN_MAX);
+    const boxLeft = toScreenX(AXIS_DOMAIN_MIN);
+    const boxRight = toScreenX(AXIS_DOMAIN_MAX);
+    const boxTop = toScreenY(AXIS_DOMAIN_MAX);
+    const boxBottom = toScreenY(AXIS_DOMAIN_MIN);
+    const aLabelY = Math.min(boxBottom, size.height - 14);
+    const bLabelX = Math.max(boxLeft, 0) + 4;
     ctx.font = '10px monospace';
     ctx.textBaseline = 'top';
-    for (let a = Math.ceil(minA / step) * step; a <= maxA; a += step) {
+    for (let a = Math.ceil(minA / step) * step; a <= maxA + 1e-9; a += step) {
       const x = toScreenX(a);
-      ctx.strokeStyle = Math.abs(a) < 1e-9 ? palette.gridAxis : palette.gridLine;
+      const isAxis = Math.abs(a) < 1e-9;
+      ctx.strokeStyle = isAxis ? palette.gridAxis : palette.gridLine;
+      ctx.lineWidth = isAxis ? 1.5 : 1;
       ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, size.height);
+      ctx.moveTo(x, boxTop);
+      ctx.lineTo(x, boxBottom);
       ctx.stroke();
       ctx.fillStyle = palette.tickText;
-      ctx.fillText(formatAngleDegrees(a, displayScale), x + 2, size.height - 14);
+      ctx.fillText(formatAngleDegrees(a, displayScale), x + 2, aLabelY);
     }
     ctx.textBaseline = 'middle';
-    for (let b = Math.ceil(minB / step) * step; b <= maxB; b += step) {
+    for (let b = Math.ceil(minB / step) * step; b <= maxB + 1e-9; b += step) {
       const y = toScreenY(b);
-      ctx.strokeStyle = Math.abs(b) < 1e-9 ? palette.gridAxis : palette.gridLine;
+      const isAxis = Math.abs(b) < 1e-9;
+      ctx.strokeStyle = isAxis ? palette.gridAxis : palette.gridLine;
+      ctx.lineWidth = isAxis ? 1.5 : 1;
       ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(size.width, y);
+      ctx.moveTo(boxLeft, y);
+      ctx.lineTo(boxRight, y);
       ctx.stroke();
       ctx.fillStyle = palette.tickText;
-      ctx.fillText(formatAngleDegrees(b, displayScale), 4, y - 12);
+      ctx.fillText(formatAngleDegrees(b, displayScale), bLabelX, y - 12);
     }
+
+    // Bounding box border for the domain itself, black to match the axes —
+    // this is "the box from 0 to 90 both ways" the graph is meant to read as.
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(boxLeft, boxTop, boxRight - boxLeft, boxBottom - boxTop);
 
     // Every visible sequence's region, in row order (stable z-order — see
     // the module comment above for why overlap uses alpha blending instead
@@ -389,6 +452,59 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ series, currentPoint
       ctx.restore();
     }
 
+    // Two fixed guide lines for the triangle-angle domain's straight edges
+    // (A < B and A + B <= 90 already bound every plotted region): A = B and
+    // A + B = 90, in the same black as the axes, drawn on top of the
+    // plotted regions so they stay visible over dense point clouds, with a
+    // dark-haloed light label so the text reads against either background.
+    ctx.save();
+    ctx.strokeStyle = REFERENCE_LINE_COLOR;
+    ctx.lineWidth = 1.5;
+    ctx.font = 'bold 11px monospace';
+    const drawGuideLabel = (text, x, y) => {
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = REFERENCE_LABEL_HALO_COLOR;
+      ctx.strokeText(text, x, y);
+      ctx.fillStyle = REFERENCE_LABEL_COLOR;
+      ctx.fillText(text, x, y);
+      ctx.strokeStyle = REFERENCE_LINE_COLOR;
+      ctx.lineWidth = 1.5;
+    };
+    // A = B
+    {
+      const aStart = Math.max(minA, minB);
+      const aEnd = Math.min(maxA, maxB);
+      if (aStart < aEnd) {
+        const x1 = toScreenX(aStart), y1 = toScreenY(aStart);
+        const x2 = toScreenX(aEnd), y2 = toScreenY(aEnd);
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'bottom';
+        drawGuideLabel('A = B', x2 - 6, y2 - 6);
+      }
+    }
+    // A + B = 90
+    {
+      const aStart = Math.max(minA, 90 - maxB);
+      const aEnd = Math.min(maxA, 90 - minB);
+      if (aStart < aEnd) {
+        const x1 = toScreenX(aStart), y1 = toScreenY(90 - aStart);
+        const x2 = toScreenX(aEnd), y2 = toScreenY(90 - aEnd);
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        drawGuideLabel('A + B = 90', x1 + 6, y1 + 6);
+      }
+    }
+    ctx.restore();
+
     // Currently committed A/B pair for the active sequence: sized to match
     // whatever the last-drawn series used for its own points (orangeRadius
     // above), always drawn sharp (no blur — ctx.filter was already reset
@@ -445,11 +561,15 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ series, currentPoint
       // Locking the view disables mouse-wheel zoom entirely.
       if (isLocked) return;
       const direction = e.deltaY > 0 ? -1 : 1;
-      setZoom((prev) => clampZoom(prev * (direction > 0 ? WHEEL_ZOOM_FACTOR : 1 / WHEEL_ZOOM_FACTOR)));
+      setZoom((prevZoom) => {
+        const nextZoom = clampZoom(prevZoom * (direction > 0 ? WHEEL_ZOOM_FACTOR : 1 / WHEEL_ZOOM_FACTOR));
+        setPan((prevPan) => clampPanToDomain(prevPan, nextZoom, size.width, size.height));
+        return nextZoom;
+      });
     };
     container.addEventListener('wheel', handleWheel, { passive: false });
     return () => container.removeEventListener('wheel', handleWheel);
-  }, [isLocked, clampZoom]);
+  }, [isLocked, clampZoom, size.width, size.height]);
 
   const handleMouseDown = (e) => {
     if (e.button !== 0) return;
@@ -466,7 +586,7 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ series, currentPoint
     if (isDragging) {
       const dx = (e.clientX - dragStart.current.x) / zoom;
       const dy = (e.clientY - dragStart.current.y) / zoom;
-      setPan((prev) => ({ a: prev.a - dx, b: prev.b + dy }));
+      setPan((prev) => clampPanToDomain({ a: prev.a - dx, b: prev.b + dy }, zoom, size.width, size.height));
       dragStart.current = { x: e.clientX, y: e.clientY };
     } else {
       setHoverMatches(findMatchesAt(screenX, screenY));

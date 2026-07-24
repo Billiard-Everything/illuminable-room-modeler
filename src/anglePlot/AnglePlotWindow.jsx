@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { X, RotateCcw, RefreshCw, Loader2, GripHorizontal, ZoomIn, ZoomOut, Maximize, Lock, Unlock, AlertTriangle, Eye, EyeOff } from 'lucide-react';
+import { X, RotateCcw, RefreshCw, Loader2, GripHorizontal, ZoomIn, ZoomOut, Maximize, Lock, Unlock, AlertTriangle, Eye, EyeOff, Minus, Square } from 'lucide-react';
 import AnglePlotPanel from './AnglePlotPanel.jsx';
 import { generateAngleRegion } from './generateAngleRegion.js';
 import { generateVisibleAnglePoints } from './visibleAnglePointGenerator.js';
@@ -82,11 +82,22 @@ const MAX_CONCURRENT_SEQUENCE_JOBS = 2;
 
 const emptyRowResult = () => ({ points: [], status: 'idle', mode: null, renderInfo: null, progress: null, error: null });
 
-export default function AnglePlotWindow({ sequences, activeSequenceId, angleParams, baseLength, buildValidateCandidateForSequence, refreshToken, onClose, onShowAll, onHideAll, theme }) {
+export default function AnglePlotWindow({ sequences, activeSequenceId, angleParams, baseLength, buildValidateCandidateForSequence, refreshToken, onClose, onShowAll, onHideAll }) {
   const [pos, setPos] = useState({ x: 96, y: 72 });
   const [size, setSize] = useState(DEFAULT_SIZE);
   const dragOffset = useRef(null);
   const resizeStart = useRef(null);
+  // Minimized collapses the whole window down to just its title bar (like a
+  // normal OS window minimize) without closing it or losing any state —
+  // every job/result/view setting below is untouched and reappears exactly
+  // as it was on restore.
+  const [isMinimized, setIsMinimized] = useState(false);
+  // Closing this window unmounts it, which discards `results` (every
+  // row's generated points) entirely — unlike minimizing, which keeps
+  // everything and just hides the body. Confirmed once before actually
+  // calling onClose, so that isn't lost by an accidental click.
+  const [showCloseConfirm, setShowCloseConfirm] = useState(false);
+  const requestClose = () => setShowCloseConfirm(true);
 
   // Per-sequence-id render results/status. Never cleared on hide, only on delete.
   const [results, setResults] = useState({});
@@ -468,7 +479,7 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
   return (
     <div
       className="fixed z-50 flex flex-col bg-[#10151c] border border-white/10 rounded-lg shadow-[0_20px_60px_rgba(0,0,0,0.55)] overflow-hidden select-none"
-      style={{ left: pos.x, top: pos.y, width: size.width, height: size.height }}
+      style={{ left: pos.x, top: pos.y, width: size.width, height: isMinimized ? undefined : size.height }}
     >
       {/* Title bar: the "normal title bar" this pop-up is dragged by. */}
       <div
@@ -479,11 +490,24 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
           <GripHorizontal className="w-3.5 h-3.5 text-slate-600 shrink-0" />
           <span className="text-xs font-bold text-slate-200 truncate">Valid Angle A&ndash;B Region</span>
         </div>
-        <button type="button" onClick={onClose} title="Close" className="text-slate-500 hover:text-red-300 shrink-0">
-          <X className="w-4 h-4" />
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setIsMinimized((m) => !m); }}
+            onMouseDown={(e) => e.stopPropagation()}
+            title={isMinimized ? 'Restore' : 'Minimize'}
+            className="text-slate-500 hover:text-cyan-200"
+          >
+            {isMinimized ? <Square className="w-3.5 h-3.5" /> : <Minus className="w-4 h-4" />}
+          </button>
+          <button type="button" onClick={requestClose} title="Close" className="text-slate-500 hover:text-red-300">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
+      {isMinimized ? null : (
+      <>
       {/* Controls. */}
       <div className="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-white/10 shrink-0">
         <button
@@ -531,7 +555,7 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
         </button>
         <button
           type="button"
-          onClick={onClose}
+          onClick={requestClose}
           className="flex items-center gap-1.5 bg-[#101820]/95 hover:bg-[#172230] text-slate-200 px-2.5 py-1.5 rounded-md text-[11px] font-bold"
         >
           Close
@@ -617,7 +641,6 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
           ref={panelRef}
           series={series}
           currentPoint={currentPoint}
-          theme={theme}
           isLocked={isViewLocked}
           onViewChange={handleViewChange}
         />
@@ -633,6 +656,45 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
           <path d="M14 2 L2 14 M14 8 L8 14 M14 14 L14 14" stroke="currentColor" strokeWidth="1.5" fill="none" />
         </svg>
       </div>
+      </>
+      )}
+
+      {/* Close confirmation: closing unmounts this window, which discards
+          every row's generated points — minimizing does not, so the
+          dialog steers toward that instead of losing plotted work to a
+          stray click. */}
+      {showCloseConfirm && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4"
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <div role="alertdialog" aria-modal="true" aria-labelledby="close-confirm-title" className="w-full max-w-xs bg-[#151c24] border border-amber-400/30 rounded-lg shadow-[0_20px_60px_rgba(0,0,0,0.55)] p-4">
+            <h3 id="close-confirm-title" className="text-sm font-bold text-amber-200 mb-2 flex items-center gap-1.5">
+              <AlertTriangle className="w-4 h-4 shrink-0" /> Close this graph window?
+            </h3>
+            <p className="text-xs text-slate-300 leading-relaxed mb-4">
+              Closing does not save your plotted graphs — every visible sequence's points will be discarded, and you'll need to regenerate them next time. To keep them, minimize this window instead of closing it.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                autoFocus
+                onClick={() => setShowCloseConfirm(false)}
+                className="bg-[#0b1016] hover:bg-[#172230] border border-white/10 text-slate-300 px-3 py-1.5 rounded-md text-[11px] font-bold transition-colors"
+              >
+                No, keep it open
+              </button>
+              <button
+                type="button"
+                onClick={() => { setShowCloseConfirm(false); onClose(); }}
+                className="bg-red-500/20 hover:bg-red-500/30 border border-red-400/40 text-red-100 px-3 py-1.5 rounded-md text-[11px] font-bold transition-colors"
+              >
+                Yes, close it
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
