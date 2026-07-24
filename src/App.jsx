@@ -215,40 +215,65 @@ const testCentroid = (tri, edge) => {
 
 /** Builds the reflected-triangle chain used by ray mode. */
 const buildRayModeData = ({ baseTriangle, rayStartVertex, rayAngle, maxBounces, svgSize, zoom }) => {
+  // Start the unfolding from the immutable base-triangle vertices.
   const T0 = baseTriangle.points;
+  // Collect each reflected copy in ray-traversal order.
   const triangles = [];
+  // Anchor the ray at the selected physical vertex.
   const O = { ...T0[rayStartVertex] };
+  // Convert the displayed angle to radians for trigonometry.
   const rad = (rayAngle * Math.PI) / 180;
+  // Use a unit direction vector to parameterize the ray as O + tD.
   const D = { x: Math.cos(rad), y: Math.sin(rad) };
 
+  // Begin intersection checks in the original triangle.
   let currentTri = [...T0];
+  // Track the last accepted distance along the ray to prevent repeat hits.
   let currentRayT = 0;
 
+  // Generate at most the requested number of reflected triangles.
   for (let i = 0; i < maxBounces; i++) {
+    // Search for the nearest valid future edge intersection.
     let bestT = Infinity;
+    // Retain the edge associated with the nearest intersection.
     let bestEdge = null;
+    // Break vertex-hit ties using the most forward reflected centroid.
     let bestForwardness = -Infinity;
+    // Measure candidate reflection directions from the current triangle.
     const currentCentroid = getCentroid(currentTri);
 
+    // Test the ray against every edge of the current triangle.
     for (let e = 0; e < 3; e++) {
+      // Read the first endpoint of the candidate edge.
       const V1 = currentTri[e];
+      // Wrap the second endpoint for the final edge.
       const V2 = currentTri[(e + 1) % 3];
+      // Form the finite edge direction vector.
       const E = { x: V2.x - V1.x, y: V2.y - V1.y };
+      // Compute the two-dimensional ray/edge cross-product denominator.
       const denom = D.x * E.y - D.y * E.x;
 
+      // Parallel ray and edge lines cannot yield a stable intersection.
       if (Math.abs(denom) < 1e-10) continue;
 
+      // Measure the edge start relative to the fixed ray origin.
       const diff = { x: V1.x - O.x, y: V1.y - O.y };
+      // Solve for the distance along the ray.
       const t = (diff.x * E.y - diff.y * E.x) / denom;
+      // Solve for the normalized position along the finite edge.
       const u = (diff.x * D.y - diff.y * D.x) / denom;
 
+      // Keep only future hits that lie on the edge, allowing small numeric drift.
       if (t > currentRayT + 1e-8 && u >= -1e-8 && u <= 1 + 1e-8) {
         // A rounded angle can make a ray that should pass through a vertex hit
         // either adjoining edge a few ulps apart.  Treat those intersections as
         // one vertex hit and choose the reflection that continues furthest ahead.
         const nextCentroid = testCentroid(currentTri, e);
+        // Prefer the reflection whose centroid advances furthest along the ray.
         const forwardness = (nextCentroid.x - currentCentroid.x) * D.x + (nextCentroid.y - currentCentroid.y) * D.y;
+        // Scale the tie tolerance for long ray paths while preserving a floor.
         const hitTolerance = Math.max(1e-8, Math.abs(bestT) * 1e-10);
+        // Replace the current winner with a nearer hit or a more-forward tie.
         if (t < bestT - hitTolerance || (Math.abs(t - bestT) <= hitTolerance && forwardness > bestForwardness)) {
           bestT = t;
           bestEdge = e;
@@ -257,36 +282,54 @@ const buildRayModeData = ({ baseTriangle, rayStartVertex, rayAngle, maxBounces, 
       }
     }
 
+    // Stop when the ray does not reach another triangle edge.
     if (bestEdge === null) break;
 
+    // Convert the selected ray distance back to a Cartesian hit point.
     const hitX = O.x + bestT * D.x;
+    // Convert the selected ray distance back to a Cartesian hit point.
     const hitY = O.y + bestT * D.y;
+    // Detect a return to the original ray origin after preserving its final copy.
     const hitIsOrigin = (hitX - O.x) ** 2 + (hitY - O.y) ** 2 < 1e-10;
 
+    // Keep the crossed edge's first endpoint fixed during reflection.
     const p1 = currentTri[bestEdge];
+    // Keep the crossed edge's second endpoint fixed during reflection.
     const p2 = currentTri[(bestEdge + 1) % 3];
+    // Reflect only the vertex opposite the crossed edge.
     const p3 = currentTri[(bestEdge + 2) % 3];
+    // Mirror the opposite vertex across the crossed edge.
     const newP3 = reflectPoint(p3, p1, p2);
 
+    // Rebuild the reflected triangle while retaining vertex indices.
     const nextTri = [];
+    // Copy the first mirror-edge endpoint into its original index.
     nextTri[bestEdge] = { ...p1 };
+    // Copy the second mirror-edge endpoint into its original index.
     nextTri[(bestEdge + 1) % 3] = { ...p2 };
+    // Insert the reflected opposite vertex into its original index.
     nextTri[(bestEdge + 2) % 3] = { ...newP3 };
 
+    // Add the completed reflected triangle before evaluating the terminal hit.
     triangles.push({
       id: `Ray-T${i + 1}`,
       points: nextTri,
       color: COLORS[(i) % COLORS.length]
     });
 
+    // Continue future intersection tests from the newly reflected triangle.
     currentTri = nextTri;
+    // Advance past the edge just crossed so it is not selected again.
     currentRayT = bestT;
 
+    // The terminal reflected triangle remains visible when the ray returns home.
     if (hitIsOrigin) break;
   }
 
+  // Use the viewport scale for a ray that has not yet intersected an edge.
   const finalT = currentRayT === 0 ? Math.max(svgSize.width, svgSize.height) / zoom : currentRayT;
 
+  // Return both the reflected chain and the visible ray segment.
   return {
     triangles,
     rayLine: { x1: O.x, y1: O.y, x2: O.x + finalT * D.x, y2: O.y + finalT * D.y }
@@ -1695,6 +1738,7 @@ export default function App() {
     // In code mode, skip all ray calculations and expose a harmless empty result.
     if (simulatorMode !== 'ray') return { triangles: [], rayLine: null };
 
+    // Delegate the pure ray-unfolding calculation to the testable helper.
     return buildRayModeData({
       baseTriangle,
       rayStartVertex,
