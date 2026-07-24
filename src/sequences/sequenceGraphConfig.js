@@ -40,19 +40,24 @@ export const colorForSequenceNumber = (number) => (
 /**
  * Builds a new sequence row. `number` is the monotonically increasing
  * creation index (never reused, even after earlier rows are deleted) — it
- * drives both the default label ("Graph N") and the stable color
- * assignment, so neither shifts when unrelated rows are removed.
+ * drives the stable color assignment so a row's color never shifts when
+ * unrelated rows are removed. `label` starts as `Graph ${number}` but is
+ * NOT stable long-term: see `relabelSequenceRows` below, which is what
+ * actually keeps labels matching each row's current position.
  *
  * `angleA`/`angleB` are this row's own physical base angles (degrees) —
  * each row's main-canvas point and graph reference geometry, independent of
- * every other row's. `draftSequenceText` is the live-typing buffer shown in
- * the sequence input; `sequenceText` only changes when a draft is
- * successfully applied (Enter/blur), so mid-typing keystrokes never touch
- * the graph or main canvas. `validationError` holds the last apply/edit
- * rejection reason for this row (sequence or angle), cleared on the next
- * successful apply.
+ * every other row's. They default to blank (not a guessed number): a new
+ * row has no meaningful angle yet, so the main controls show an "Enter
+ * Angle A/B" placeholder instead of a pre-filled value the user didn't
+ * choose. `draftSequenceText` is the live-typing buffer shown in the
+ * sequence input; `sequenceText` only changes when a draft is successfully
+ * applied (Enter/blur), so mid-typing keystrokes never touch the graph or
+ * main canvas. `validationError` holds the last apply/edit rejection
+ * reason for this row (sequence or angle), cleared on the next successful
+ * apply.
  */
-export const createSequenceRow = ({ number, sequenceText = '', angleStepInput = '0.1', angleA = 15, angleB = 50 }) => ({
+export const createSequenceRow = ({ number, sequenceText = '', angleStepInput = '0.1', angleA = '', angleB = '' }) => ({
   id: `seq-${number}`,
   label: `Graph ${number}`,
   sequenceText,
@@ -64,6 +69,16 @@ export const createSequenceRow = ({ number, sequenceText = '', angleStepInput = 
   visible: true,
   validationError: null,
 });
+
+/**
+ * Reassigns every row's display label to its 1-based position in the list
+ * ("Graph 1", "Graph 2", ...) — independent of each row's creation-order id
+ * and color, which stay put. Call this after any add/remove/reorder so the
+ * top row always reads "Graph 1" etc., instead of labels frozen at
+ * creation time (which would leave gaps like "Graph 2, Graph 3" after
+ * "Graph 1" is deleted).
+ */
+export const relabelSequenceRows = (rows) => rows.map((row, index) => ({ ...row, label: `Graph ${index + 1}` }));
 
 /** Whether `hex` is a valid `#rrggbb` color string. */
 export const isValidHexColor = (hex) => typeof hex === 'string' && /^#[0-9a-fA-F]{6}$/.test(hex);
