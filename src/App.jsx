@@ -1,10 +1,18 @@
 // React supplies state, refs, effects, and memoization for this client-only tool.
 import { useState, useRef, useEffect, useMemo } from 'react';
 // Lucide supplies recognizable control/status icons without custom SVG code.
-import { Maximize, Zap, Settings2, List, Code2, Compass, ChevronRight, Activity, CheckCircle2, XCircle, ShieldCheck, Eye, Search, AlertTriangle, Sun, Moon, ZoomIn, ZoomOut, Lock, Unlock, ScatterChart } from 'lucide-react';
+import { Maximize, Zap, Settings2, List, Code2, Compass, ChevronRight, Activity, CheckCircle2, XCircle, ShieldCheck, Eye, EyeOff, Search, AlertTriangle, Sun, Moon, ZoomIn, ZoomOut, Lock, Unlock, ScatterChart, Plus, Copy, Trash2 } from 'lucide-react';
 // The angle-region plot pop-up lives in its own module (see src/anglePlot) so
 // it can be unit-tested without React and does not bloat this file further.
 import AnglePlotWindow from './anglePlot/AnglePlotWindow.jsx';
+// The multi-sequence row list (Desmos-style "+ Add Sequence") is a plain
+// data model shared between the sidebar row list and the graph pop-up, so
+// both stay in sync on id/label/color assignment without duplicating logic.
+import { createSequenceRow, isValidHexColor, parseSequenceDraftText } from './sequences/sequenceGraphConfig.js';
+// Per-row Angle Step validation/mode reuses the exact same parser the graph
+// itself uses, so a row's "Exact"/"Adaptive" badge never disagrees with
+// what AnglePlotWindow actually does with that same text.
+import { parseAngleStep, isExactModeStep } from './anglePlot/angleStep.js';
 
 // =============================================================================
 // App.jsx architecture note
@@ -432,11 +440,8 @@ const unfoldCodeData = (billiardsCode, baseTriangle, enabled = true) => {
     else angles.push(axes.find(a => a !== currAngle && a !== lastAngle));
   }
 
-  // The app-facing convention names the smallest/default physical angle x and the largest z.
-  const displaySymbol = (symbol) => symbol === 'x' ? 'z' : symbol === 'z' ? 'x' : symbol;
-
-  // Pair each numeric run with its relabeled symbolic angle for display and unfolding.
-  const parsedSequence = nums.map((n, i) => ({ count: n, angle: displaySymbol(angles[i]) }));
+  // Pair each numeric run with its derived symbolic angle for display and unfolding.
+  const parsedSequence = nums.map((n, i) => ({ count: n, angle: angles[i] }));
 
   // Track the largest run attached to each symbolic angle.
   const maxBouncesCode = { x: 0, y: 0, z: 0 };
@@ -594,7 +599,18 @@ const unfoldCodeData = (billiardsCode, baseTriangle, enabled = true) => {
 
 /** Returns the complete reflected chain that belongs on the canvas. */
 const getRenderableActiveTriangles = (activeTriangles) => {
-  // Every code-mode triangle is produced by a real reflection; none is look-ahead geometry.
+  // This is the single seam between "triangle gets a polygon" and "its
+  // vertices get colored markers" (see the marker loop in the SVG below,
+  // which walks [baseTriangle, ...getRenderableActiveTriangles(...)]).
+  // Every element returned here is a real reflected triangle emitted by
+  // unfoldCodeData, not a look-ahead/preview computed for the *next* count
+  // block that hasn't been unfolded yet — so there is no unrendered
+  // triangle whose vertex still gets marked. Do not slice/trim this list
+  // (e.g. dropping the last triangle) without also removing its markers,
+  // or the two loops will disagree and a vertex will render with no
+  // matching polygon under it. See tests/math-regression.test.mjs's
+  // "rendering includes the final reflected triangle instead of treating
+  // it as look-ahead geometry" for the regression this guards against.
   return activeTriangles;
 };
 
@@ -1457,10 +1473,15 @@ export default function App() {
   const [simulatorMode, setSimulatorMode] = useState('code'); 
   // The base triangle can be entered as coordinates or as two angles plus length.
   const [baseInputMode, setBaseInputMode] = useState('angles'); 
-  // Default angle data is chosen so physical A is the small angle in the prototype.
-  const [angleParams, setAngleParams] = useState({ a: 15, b: 50, length: 10 }); 
-  // Angle increment controls the native number-stepper amount for Angle A and Angle B.
-  const [angleIncrementInput, setAngleIncrementInput] = useState(String(DEFAULT_ANGLE_INCREMENT));
+  // Base length is the only piece of the old "angleParams" that is still
+  // genuinely shared across every row — Angle A/B now live per-row (see
+  // `sequences` below) so each row can have its own main-canvas point.
+  const [baseTriangleLength, setBaseTriangleLength] = useState(10);
+  // Increment for the Angle A/B number-stepper arrows, and the default
+  // Angle Step given to newly-added sequences. No longer user-editable (the
+  // visible "A/B Spinner" control was removed as confusing); fixed at its
+  // default rather than left as dead state.
+  const angleIncrementInput = String(DEFAULT_ANGLE_INCREMENT);
   // This separate increment controls the native stepper attached to the Angle Step field itself.
   const [angleStepControlIncrementInput, setAngleStepControlIncrementInput] = useState(String(DEFAULT_ANGLE_STEP_CONTROL_INCREMENT));
   // Coordinate defaults create a right-ish triangle for immediate manual testing.
@@ -1479,14 +1500,49 @@ export default function App() {
   const [maxBounces, setMaxBounces] = useState(15); 
   
   // --- CODE UNFOLDER SPECIFIC STATE ---
+  // Desmos-style sequence list: each row is one independent bounce-code
+  // unfolding (its own text, Angle Step, color, visibility). The row that
+  // was previously the app's only sequence becomes "Graph 1" here so no
+  // existing work is lost when this feature is introduced. A ref (not
+  // state) tracks the next creation number so labels/colors stay stable
+  // and never renumber when an earlier row is deleted.
+  const nextSequenceNumberRef = useRef(2);
+  const [sequences, setSequences] = useState(() => [
+    createSequenceRow({ number: 1, sequenceText: "3 1 7 2 6 2 8 2 4 2", angleStepInput: String(DEFAULT_ANGLE_INCREMENT), angleA: 15, angleB: 50 })
+  ]);
+  // The active row drives the main unfolding canvas, the Angle A/B guarded
+  // edits, and the Constrained/Ghost/Search tools below — exactly what
+  // `billiardsCode` alone used to drive before this row list existed.
+  const [activeSequenceId, setActiveSequenceId] = useState('seq-1');
+  const activeSequence = sequences.find(s => s.id === activeSequenceId) || sequences[0];
+  // `angleParams` is now derived, not stored: Angle A/B come from whichever
+  // row is active (so the main canvas always reflects that row's own
+  // angles) while base length stays the one value every row shares. Every
+  // existing reader of `angleParams` (buildBaseTriangle, the guarded-edit
+  // validators, findStableRegion, etc.) keeps working unchanged against
+  // this same {a, b, length} shape.
+  const angleParams = useMemo(() => ({
+    a: activeSequence?.angleA ?? 15,
+    b: activeSequence?.angleB ?? 50,
+    length: baseTriangleLength,
+  }), [activeSequence, baseTriangleLength]);
   // Space-separated integer blocks are parsed into symbolic angle runs.
-  const [billiardsCode, setBilliardsCode] = useState("3 1 7 2 6 2 8 2 4 2"); 
+  // Kept as a read-only alias (instead of renaming every downstream use)
+  // so the rest of this file's geometry/validation logic, which predates
+  // the multi-sequence feature, keeps working unchanged against "whichever
+  // sequence is active" exactly as it did against the old single value.
+  const billiardsCode = activeSequence?.sequenceText ?? '';
   // Constrained rejects invalid guarded edits; Ghost allows invalid inspection.
   const [shotEditMode, setShotEditMode] = useState(SHOT_MODE_LOCKED);
   // Epsilon is stored as text so scientific notation remains editable.
   const [clearanceEpsilonInput, setClearanceEpsilonInput] = useState(String(DEFAULT_CLEARANCE_EPSILON));
   // A rejected locked edit reports what was blocked without changing geometry.
   const [lockedShotNotice, setLockedShotNotice] = useState(null);
+  // Plain-English pop-up for a rejected sequence/angle apply: { title, message, focusId }.
+  const [errorModal, setErrorModal] = useState(null);
+  // Sequence-text <input> elements by row id, so the error modal can return
+  // focus to the exact row that was rejected once it's dismissed.
+  const sequenceInputRefsRef = useRef({});
   // The latest stable-region search result is shown until inputs change.
   const [stableRegionResult, setStableRegionResult] = useState(null);
   // Ghost mode compares edits against the constrained path captured when Ghost starts.
@@ -1603,6 +1659,12 @@ export default function App() {
     // Resolve the independently configurable native increment for the Angle Step control.
     return resolvePositiveInputStep(angleStepControlIncrementInput, DEFAULT_ANGLE_STEP_CONTROL_INCREMENT);
   }, [angleStepControlIncrementInput]);
+
+  // Validity of the active row's own Angle Step, shown next to the single
+  // main-control editor for it (the per-row list only displays this value).
+  const activeRowParsedStep = useMemo(() => parseAngleStep(activeSequence?.angleStepInput ?? ''), [activeSequence?.angleStepInput]);
+  const activeRowStepValid = activeRowParsedStep.valid;
+  const activeRowStepError = activeRowParsedStep.error;
 
   const formatFixed = (value) => {
     // Non-finite geometry values should be visible instead of throwing in toFixed().
@@ -1737,6 +1799,13 @@ export default function App() {
     if (!hasCompleteAngleParams(candidateParams)) return { allowed: false, reason: 'angle input is incomplete' };
     // Non-triangular inputs are rejected in Constrained mode because they destroy the shot.
     if (!hasValidAngleTriangle(candidateParams)) return { allowed: false, reason: 'triangle angles are invalid' };
+    // Same A < B, A + B <= 90 domain restriction the "Valid Angle A-B
+    // Region" graph already enforces (see angleValidation.js), now applied
+    // to live edits too so the two notions of "valid A/B" never disagree.
+    const candidateA = Number(candidateParams.a);
+    const candidateB = Number(candidateParams.b);
+    if (candidateA >= candidateB) return { allowed: false, reason: 'Angle A must be smaller than Angle B' };
+    if (candidateA + candidateB > 90) return { allowed: false, reason: 'Angle A and Angle B must sum to at most 90°' };
 
     // Build the candidate triangle without committing it to React state.
     const candidateTriangle = buildBaseTriangle('angles', baseCoordsInput, candidateParams);
@@ -1759,6 +1828,71 @@ export default function App() {
     return { allowed: true };
   };
 
+  // Per-sequence-row equivalent of validateLockedAngleCandidate above, used
+  // by the multi-sequence graph pop-up to test an arbitrary (A, B) pair
+  // against *any* row's sequence text. Since Angle A/B are now per-row (not
+  // one shared value), `referenceAngleParams` lets each row validate
+  // candidates against *its own* committed angles as the reference geometry
+  // — defaulting to the active row's when omitted, which preserves the
+  // single-row behavior this closure originally had. Unlike
+  // validateLockedAngleCandidate this intentionally ignores shotEditMode
+  // (Ghost/Constrained) — that toggle exists to guard *live edits* to the
+  // active row, not to redefine what "valid" means for a plotted region,
+  // so every row's graph uses the same Constrained-style validity
+  // definition regardless of which mode the active row happens to be in.
+  const buildValidateCandidateForSequence = (sequenceText, referenceAngleParams = angleParams) => (candidateParams) => {
+    if (!sequenceText || !sequenceText.trim()) return { allowed: false, reason: 'sequence is empty' };
+    if (!hasCompleteAngleParams(candidateParams)) return { allowed: false, reason: 'angle input is incomplete' };
+    if (!hasValidAngleTriangle(candidateParams)) return { allowed: false, reason: 'triangle angles are invalid' };
+
+    const candidateTriangle = buildBaseTriangle('angles', baseCoordsInput, candidateParams);
+    const candidateCodeData = unfoldCodeData(sequenceText, candidateTriangle, true);
+    // The reference path is this row's own current committed unfolding
+    // (same sequence text, against that row's own committed angles), not
+    // necessarily the active row's — each row is validated against itself.
+    const referenceTriangle = buildBaseTriangle('angles', baseCoordsInput, referenceAngleParams);
+    const committedCodeData = unfoldCodeData(sequenceText, referenceTriangle, true);
+    const pathConsistency = buildCodePathConsistencyValidation({ candidateCodeData, reference: buildCodePathReference(committedCodeData) });
+    const candidateSelfValidation = buildPoolshotTowerValidation({ simulatorMode: 'code', baseTriangle: candidateTriangle, activeTriangles: candidateCodeData.triangles, labelsMap: candidateCodeData.idxToAngle, reflectionEdges: candidateCodeData.reflectionEdges, parsedSequence: candidateCodeData.parsedSequence, clearanceEpsilon, extraViolations: pathConsistency.violations });
+    if (candidateSelfValidation.status === 'invalid') {
+      const firstViolation = candidateSelfValidation.violations[0];
+      const reason = firstViolation ? `${firstViolation.triId} ${firstViolation.vertexName || firstViolation.symbol} expected ${firstViolation.expected}` : 'candidate ray failed blue/black line test';
+      return { allowed: false, reason };
+    }
+    return { allowed: true };
+  };
+
+  // Builds the detailed, plain-English explanation shown inline when a live
+  // Angle A/B/Length edit is rejected. Deliberately NOT a modal: these
+  // inputs commit on every keystroke (for immediate visual feedback), and a
+  // typical multi-digit edit passes through several transiently-invalid
+  // states (e.g. typing "23" one digit at a time) — a pop-up on every one
+  // of those would make the fields nearly unusable. The full detail still
+  // needs to be visible, just without blocking typing.
+  const describeAngleRejection = (field, value, reason) => {
+    const isLengthField = field === 'length';
+    const currentA = Number(field === 'a' ? value : angleParams.a);
+    const currentB = Number(field === 'b' ? value : angleParams.b);
+    const knownReasonFixes = {
+      'angle input is incomplete': 'Finish entering a numeric value for every field.',
+      'triangle angles are invalid': 'Enter positive angles whose sum stays under 180°, with a positive base length.',
+      'Angle A must be smaller than Angle B': 'Increase Angle B or decrease Angle A so Angle A is smaller.',
+      'Angle A and Angle B must sum to at most 90°': 'Reduce Angle A or Angle B so their sum is at most 90°.',
+    };
+    const requiredConstraints = isLengthField
+      ? ['Base Length must be a positive number.']
+      : ['Angle A must be greater than 0°.', 'Angle B must be greater than 0°.', 'Angle A must be smaller than Angle B.', 'Angle A + Angle B must be at most 90°.'];
+    if (!isLengthField && !(reason in knownReasonFixes)) {
+      requiredConstraints.push(`This sequence also requires: ${reason}.`);
+    }
+    const howToFix = knownReasonFixes[reason] || `Adjust the value so this sequence's unfolding stays valid (${reason}).`;
+    return { field, value, reason, isLengthField, currentA, currentB, requiredConstraints, howToFix };
+  };
+
+  // Edits the Angle A/B/Length panel used by the main canvas and the
+  // Constrained/Ghost/Search tools below — always operating on the
+  // *active* row's angles (Angle A/B) or the one shared base length,
+  // exactly what a single global angleParams state used to hold directly.
   const handleAngleParamChange = (field, value) => {
     // Candidate state mirrors what React would store if the edit is accepted.
     const candidateParams = { ...angleParams, [field]: value };
@@ -1766,15 +1900,20 @@ export default function App() {
     const guard = validateLockedAngleCandidate(candidateParams);
     // Reject invalid candidates before they change the rendered geometry.
     if (!guard.allowed) {
-      // Store the blocked field/value and first line-test reason.
-      setLockedShotNotice({ field, value, reason: guard.reason });
+      // Store the full structured explanation of the blocked edit.
+      setLockedShotNotice(describeAngleRejection(field, value, guard.reason));
       // Leave angleParams unchanged so the last valid geometry remains active.
       return;
     }
     // Commit accepted edits to the normal angle state.
     clearShotFeedback();
-    // Store the accepted angle state.
-    setAngleParams(candidateParams);
+    if (field === 'length') {
+      setBaseTriangleLength(value);
+    } else {
+      // Angle A/B belong to the active row only; every other row is untouched.
+      const rowField = field === 'a' ? 'angleA' : 'angleB';
+      setSequences(rows => rows.map(row => row.id === activeSequenceId ? { ...row, [rowField]: value, validationError: null } : row));
+    }
   };
 
   const handleOpenAnglePlot = () => {
@@ -1784,6 +1923,135 @@ export default function App() {
     // surface it instead of doing nothing.
     setIsAnglePlotOpen(true);
     setAnglePlotRequestId(id => id + 1);
+  };
+
+  // --- SEQUENCE ROW LIST HANDLERS ---
+  // "+ Add Sequence": appends a new, empty, visible row and makes it active
+  // (matches "click a row to edit it" — a freshly added row is the one the
+  // user almost certainly wants to type into next).
+  const handleAddSequence = () => {
+    const number = nextSequenceNumberRef.current++;
+    const newRow = createSequenceRow({ number, angleStepInput: angleIncrementInput });
+    setSequences(rows => [...rows, newRow]);
+    setActiveSequenceId(newRow.id);
+  };
+
+  // Duplicates a row's full configuration (text, step, visibility) as a new
+  // row with its own id/label/color, inserted immediately after the source
+  // row, and makes the copy active.
+  //
+  // Reads/writes `sequences` directly (a plain value, not a setSequences(rows
+  // => ...) functional updater) and computes the new row's number/id up
+  // front instead of inside the updater. React StrictMode intentionally
+  // invokes functional updaters twice in development to catch exactly this
+  // class of bug: mutating nextSequenceNumberRef.current (or calling other
+  // setState functions) *inside* an updater would run that side effect
+  // twice per click, silently skipping a sequence number and briefly
+  // pointing setActiveSequenceId at a row from a discarded first pass.
+  const handleDuplicateSequence = (id) => {
+    const sourceIndex = sequences.findIndex(row => row.id === id);
+    if (sourceIndex === -1) return;
+    const source = sequences[sourceIndex];
+    const number = nextSequenceNumberRef.current++;
+    const copy = { ...createSequenceRow({ number, sequenceText: source.sequenceText, angleStepInput: source.angleStepInput, angleA: source.angleA, angleB: source.angleB }), visible: source.visible };
+    const next = [...sequences];
+    next.splice(sourceIndex + 1, 0, copy);
+    setSequences(next);
+    setActiveSequenceId(copy.id);
+  };
+
+  // Deletes a row. At least one row always exists: deleting the last
+  // remaining row replaces it with a fresh blank one instead of leaving an
+  // empty list. Deleting the active row hands "active" to a neighbor
+  // (prefer the next row, fall back to the previous one) so the main
+  // unfolding view always has something to show. See handleDuplicateSequence
+  // above for why this reads `sequences` directly instead of using a
+  // setSequences functional updater.
+  const handleRemoveSequence = (id) => {
+    const index = sequences.findIndex(row => row.id === id);
+    if (index === -1) return;
+    const remaining = sequences.filter(row => row.id !== id);
+    const nextRows = remaining.length > 0
+      ? remaining
+      : [createSequenceRow({ number: nextSequenceNumberRef.current++, angleStepInput: angleIncrementInput })];
+    setSequences(nextRows);
+    if (activeSequenceId === id) {
+      const fallback = remaining[index] || remaining[index - 1] || nextRows[0];
+      setActiveSequenceId(fallback.id);
+      resetShotConstraintReference();
+    }
+  };
+
+  // Visibility only hides a row from the graph and skips its background
+  // generation — it never discards the row's text/step/cached points.
+  const handleToggleSequenceVisible = (id) => {
+    setSequences(rows => rows.map(row => row.id === id ? { ...row, visible: !row.visible } : row));
+  };
+
+  const handleShowAllSequences = () => setSequences(rows => rows.map(row => ({ ...row, visible: true })));
+  const handleHideAllSequences = () => setSequences(rows => rows.map(row => ({ ...row, visible: false })));
+
+  // Free typing only ever touches the draft buffer — never the applied
+  // `sequenceText` that drives the main canvas/graph — so keystrokes
+  // (including spaces) never trigger a redraw or get rewritten mid-edit.
+  const handleSequenceDraftChange = (id, text) => {
+    setSequences(rows => rows.map(row => row.id === id ? { ...row, draftSequenceText: text } : row));
+  };
+
+  // Validates the row's draft and, only if valid, commits it as the applied
+  // sequence (Enter or blur). An invalid draft is left exactly as typed —
+  // this row's validationError is set (for the "Invalid sequence" row
+  // status) and the shared error modal explains why in plain English; nothing
+  // about the graph or main canvas changes for an invalid apply.
+  const handleApplySequenceDraft = (id) => {
+    const row = sequences.find(r => r.id === id);
+    if (!row) return;
+    if (row.draftSequenceText === row.sequenceText) return;
+    const parsed = parseSequenceDraftText(row.draftSequenceText);
+    if (!parsed.valid) {
+      const flat = parsed.sections.map(s => `${s.heading}:\n${s.text || (s.list || []).map(item => `• ${item}`).join('\n')}`).join('\n\n');
+      setSequences(rows => rows.map(r => r.id === id ? { ...r, validationError: flat } : r));
+      setErrorModal({ title: parsed.title, sections: parsed.sections, focusId: id });
+      return;
+    }
+    setSequences(rows => rows.map(r => r.id === id ? { ...r, sequenceText: r.draftSequenceText, validationError: null } : r));
+    if (id === activeSequenceId) resetShotConstraintReference();
+  };
+
+  // Escape discards the in-progress edit and restores the last applied text.
+  const handleCancelSequenceDraft = (id) => {
+    setSequences(rows => rows.map(row => row.id === id ? { ...row, draftSequenceText: row.sequenceText, validationError: null } : row));
+  };
+
+  const handleSequenceAngleStepChange = (id, text) => {
+    setSequences(rows => rows.map(row => row.id === id ? { ...row, angleStepInput: text } : row));
+  };
+
+  // Native color inputs always yield a valid #rrggbb value, but the guard
+  // keeps this handler safe if it's ever driven by something else (e.g. a
+  // pasted/typed value) — an invalid color is simply ignored, keeping the
+  // row's previous valid color. Only the edited row's color changes.
+  const handleSequenceColorChange = (id, hex) => {
+    if (!isValidHexColor(hex)) return;
+    setSequences(rows => rows.map(row => row.id === id ? { ...row, color: hex } : row));
+  };
+
+  const closeErrorModal = () => {
+    const focusId = errorModal?.focusId;
+    setErrorModal(null);
+    if (focusId) {
+      // Deferred so it runs after the modal has actually unmounted.
+      setTimeout(() => sequenceInputRefsRef.current[focusId]?.focus(), 0);
+    }
+  };
+
+  // "Active" (which row drives the main canvas) is a distinct concept from
+  // "visible" (which rows are plotted in the graph) — selecting a row here
+  // never touches any row's visibility.
+  const handleSelectActiveSequence = (id) => {
+    if (id === activeSequenceId) return;
+    setActiveSequenceId(id);
+    resetShotConstraintReference();
   };
 
   const handleStableRegionSearch = () => {
@@ -2026,12 +2294,15 @@ export default function App() {
                     type="number"
                     min="0"
                     step={angleStepControlIncrement}
-                    value={angleIncrementInput}
-                    onChange={e => setAngleIncrementInput(e.target.value)}
-                    title={`Increment for the Angle A/B number steppers and exact plot grid. Its own native step is ${angleStepControlIncrement}.`}
-                    className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2.5 py-1.5 text-sm focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 transition-all"
+                    value={activeSequence?.angleStepInput ?? ''}
+                    onChange={e => handleSequenceAngleStepChange(activeSequenceId, e.target.value)}
+                    title={`Grid step for ${activeSequence?.label ?? 'the active sequence'}'s own "Valid Angle A-B Region" graph. This is the single editing location for this value — the row list below only displays it.`}
+                    className={`w-full bg-[#0b1016] border rounded-md px-2.5 py-1.5 text-sm focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 transition-all ${activeRowStepValid ? 'border-white/10' : 'border-red-400/50'}`}
                   />
                 </div>
+                {!activeRowStepValid && (
+                  <div className="text-[10px] text-red-300 mt-1 pl-16">{activeRowStepError}</div>
+                )}
                 <div className="flex items-center gap-2">
                   <span className="text-[11px] font-bold text-slate-500 w-16 text-right mr-1">Step Increment</span>
                   <input
@@ -2044,9 +2315,24 @@ export default function App() {
                     className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2.5 py-1.5 text-sm focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 transition-all"
                   />
                 </div>
+                {/* The old "A/B Spinner" field (angleIncrementInput) is no
+                    longer shown — it was a confusing extra control. Its
+                    value is kept internally at its default and still
+                    supplies the Angle A/B number-stepper increment and new
+                    row's default Angle Step; only the visible editor for it
+                    was removed. */}
                 {lockedShotNotice && (
-                  <div className="text-[10px] text-amber-100 mt-1 pl-16 font-medium bg-amber-500/10 rounded py-1.5 px-2 border border-amber-300/20">
-                    Constrained blocked {lockedShotNotice.field}={lockedShotNotice.value}: {lockedShotNotice.reason}.
+                  <div className="text-[10px] text-amber-100 mt-1 font-medium bg-amber-500/10 rounded py-1.5 px-2 border border-amber-300/20 space-y-1">
+                    <div className="font-bold">
+                      {lockedShotNotice.isLengthField ? 'Base Length' : lockedShotNotice.field === 'a' ? 'Angle A' : 'Angle B'} of {lockedShotNotice.value} was not applied.
+                    </div>
+                    {!lockedShotNotice.isLengthField && (
+                      <div>Current values: Angle A {lockedShotNotice.currentA}&deg;, Angle B {lockedShotNotice.currentB}&deg;</div>
+                    )}
+                    <ul className="list-disc pl-4 space-y-0.5">
+                      {lockedShotNotice.requiredConstraints.map((c, i) => <li key={i}>{c}</li>)}
+                    </ul>
+                    <div><span className="font-bold">How to fix it:</span> {lockedShotNotice.howToFix}</div>
                   </div>
                 )}
                 {(Number(angleParams.a) + Number(angleParams.b) >= 180) && (
@@ -2121,19 +2407,178 @@ export default function App() {
             </div>
           ) : (
             <div className="p-4 bg-[#151c24] m-3 rounded-lg shadow-[0_8px_28px_rgba(0,0,0,0.28)] border border-white/10">
-              <h2 className="text-xs uppercase tracking-wider font-bold text-cyan-200 mb-2 flex items-center gap-1.5">
-                <Code2 className="w-3.5 h-3.5" /> Sequence Parser
-              </h2>
-              <p className="text-[10px] text-slate-500 mb-3 leading-relaxed">
-                Space-separated bounce-block counts, parsed into symbolic angle runs.
+              <div className="flex items-center justify-between mb-2">
+                <h2 className="text-xs uppercase tracking-wider font-bold text-cyan-200 flex items-center gap-1.5">
+                  <Code2 className="w-3.5 h-3.5" /> Sequence Parser
+                </h2>
+                <span className="text-[10px] font-mono text-slate-500">{sequences.length} sequence{sequences.length === 1 ? '' : 's'}</span>
+              </div>
+              <p className="text-[10px] text-slate-500 mb-2 leading-relaxed">
+                Each row is one independent bounce-code sequence with its own Angle Step and graph color. Click a row to make it the active unfolding shown on the canvas.
               </p>
-              <textarea 
-                value={billiardsCode}
-                onChange={e => { resetShotConstraintReference(); setBilliardsCode(e.target.value); }}
-                className="w-full bg-[#0b1016] border border-white/10 rounded-md p-2.5 text-sm focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono resize-none h-20 text-slate-100 shadow-inner placeholder:text-slate-600"
-                placeholder="e.g. 1 5 16 5 1 2 3 6"
-              />
-              <div className="mt-4 grid grid-cols-2 gap-1 rounded-lg border border-white/10 bg-[#0b1016] p-1">
+
+              {/* Desmos-style sequence row list. Bounded height + its own
+                  scrollbar (not the whole sidebar's) so adding many rows
+                  can never push Constrained/Ghost/Search or the rest of the
+                  sidebar off screen. */}
+              <div className="space-y-1.5 max-h-56 overflow-y-auto custom-scrollbar pr-0.5 -mr-0.5">
+                {sequences.map(row => {
+                  const isActive = row.id === activeSequenceId;
+                  const parsedStep = parseAngleStep(row.angleStepInput);
+                  const modeLabel = parsedStep.valid ? (isExactModeStep(parsedStep.scale, parsedStep.stepUnits) ? 'Exact' : 'Adaptive') : null;
+                  const isDirty = row.draftSequenceText !== row.sequenceText;
+                  // Row status: Hidden/Invalid take priority over the plain
+                  // "Editing.../Ready" distinction so a bad edit is never
+                  // masked by the fact that it's also mid-typing.
+                  const rowStatus = !row.visible ? 'Hidden'
+                    : row.validationError ? (/angle/i.test(row.validationError) ? 'Invalid angles' : 'Invalid sequence')
+                    : isDirty ? 'Editing…'
+                    : 'Ready';
+                  return (
+                    <div
+                      key={row.id}
+                      onClick={() => handleSelectActiveSequence(row.id)}
+                      role="radio"
+                      aria-checked={isActive}
+                      tabIndex={0}
+                      onKeyDown={e => { if (e.target !== e.currentTarget) return; if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSelectActiveSequence(row.id); } }}
+                      title={row.sequenceText ? `${row.label}: ${row.sequenceText}` : `${row.label}: (empty sequence)`}
+                      className={`rounded-md border px-2 py-1.5 cursor-pointer transition-colors ${isActive ? 'border-cyan-300/50 bg-cyan-400/10' : 'border-white/10 bg-[#0b1016]'}`}
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <span
+                          className={`w-2 h-2 rounded-full shrink-0 border ${isActive ? 'bg-cyan-300 border-cyan-300' : 'bg-transparent border-slate-600'}`}
+                          aria-hidden="true"
+                          title={isActive ? `${row.label} is active in the main canvas` : `Click to make ${row.label} active in the main canvas`}
+                        />
+                        <input
+                          type="checkbox"
+                          checked={row.visible}
+                          onChange={() => handleToggleSequenceVisible(row.id)}
+                          onClick={e => e.stopPropagation()}
+                          aria-label={`Show ${row.label} in the graph`}
+                          title={row.visible ? `Hide ${row.label} from the graph` : `Show ${row.label} in the graph`}
+                          className="w-3 h-3 shrink-0 accent-cyan-400"
+                        />
+                        <input
+                          type="color"
+                          value={row.color}
+                          onChange={e => handleSequenceColorChange(row.id, e.target.value)}
+                          onClick={e => e.stopPropagation()}
+                          aria-label={`${row.label} graph color`}
+                          title={`Choose ${row.label}'s dot/legend color`}
+                          className="w-3.5 h-3.5 shrink-0 rounded-full border border-black/30 p-0 bg-transparent cursor-pointer appearance-none overflow-hidden"
+                        />
+                        <span className={`text-[10px] font-bold shrink-0 ${isActive ? 'text-cyan-200' : 'text-slate-400'}`}>{row.label}</span>
+                        <span className="flex-1" />
+                        <button
+                          type="button"
+                          onClick={e => { e.stopPropagation(); handleDuplicateSequence(row.id); }}
+                          title={`Duplicate ${row.label}`}
+                          aria-label={`Duplicate ${row.label}`}
+                          className="shrink-0 text-slate-500 hover:text-cyan-200 p-0.5"
+                        >
+                          <Copy className="w-3 h-3" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={e => { e.stopPropagation(); handleRemoveSequence(row.id); }}
+                          title={`Delete ${row.label}`}
+                          aria-label={`Delete ${row.label}`}
+                          className="shrink-0 text-slate-500 hover:text-red-300 p-0.5"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </div>
+                      {/* Full-width sequence field on its own line so long
+                          codes are actually readable instead of clipped
+                          beside four other controls. */}
+                      <input
+                        type="text"
+                        ref={el => { sequenceInputRefsRef.current[row.id] = el; }}
+                        value={row.draftSequenceText}
+                        onChange={e => handleSequenceDraftChange(row.id, e.target.value)}
+                        onClick={e => e.stopPropagation()}
+                        onFocus={() => handleSelectActiveSequence(row.id)}
+                        onKeyDown={e => {
+                          e.stopPropagation();
+                          if (e.key === 'Enter') { e.preventDefault(); handleApplySequenceDraft(row.id); }
+                          else if (e.key === 'Escape') { e.preventDefault(); handleCancelSequenceDraft(row.id); e.currentTarget.blur(); }
+                        }}
+                        onBlur={() => handleApplySequenceDraft(row.id)}
+                        placeholder="e.g. 1 5 16 5 1 2 3 6"
+                        aria-label={`${row.label} sequence text`}
+                        title="Type freely, including spaces. Press Enter to apply, Escape to discard the edit."
+                        className="mt-1.5 w-full bg-[#080b0f] border border-white/10 rounded px-2 py-1 text-[11px] font-mono text-slate-100 outline-none placeholder:text-slate-600 focus:border-cyan-300/50"
+                      />
+                      {/* Read-only: this sequence's own A/B/Step belong to it
+                          in the data model, but the main controls above are
+                          the only place that edits them (avoids two editors
+                          that can drift out of sync). Its own full-width,
+                          wrapping line so Step is never clipped, with A/B in
+                          a larger, easy-to-scan size. */}
+                      <div
+                        className="flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5 mt-1.5 font-mono"
+                        title="Select this row and use the main controls above to change these."
+                      >
+                        <span className={isActive ? 'text-cyan-200' : 'text-slate-300'}>
+                          <span className="text-sm font-bold">A {row.angleA}&deg;</span>
+                        </span>
+                        <span className={isActive ? 'text-cyan-200' : 'text-slate-300'}>
+                          <span className="text-sm font-bold">B {row.angleB}&deg;</span>
+                        </span>
+                        <span className="text-[11px] text-slate-500">
+                          Step {row.angleStepInput}{modeLabel ? ` (${modeLabel})` : ''}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5 mt-1">
+                        <span className={`text-[9px] font-bold ${rowStatus === 'Ready' ? 'text-emerald-300' : rowStatus === 'Editing…' ? 'text-amber-300' : rowStatus === 'Hidden' ? 'text-slate-600' : 'text-red-300'}`}>
+                          {rowStatus}
+                        </span>
+                      </div>
+                      {row.validationError && (
+                        <div className="mt-1 text-[9px] text-red-300">{row.validationError}</div>
+                      )}
+                      {!parsedStep.valid && (
+                        <div className="mt-1 text-[9px] text-red-300">Angle Step error: {parsedStep.error}</div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="mt-2 flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={handleAddSequence}
+                  className="flex-1 flex items-center justify-center gap-1.5 bg-[#0b1016] hover:bg-[#172230] border border-white/10 hover:border-cyan-300/30 text-slate-300 hover:text-cyan-200 px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-colors"
+                >
+                  <Plus className="w-3.5 h-3.5" /> Add Sequence
+                </button>
+                <button
+                  type="button"
+                  onClick={handleShowAllSequences}
+                  title="Show every sequence in the graph"
+                  aria-label="Show all sequences"
+                  className="shrink-0 bg-[#0b1016] hover:bg-[#172230] border border-white/10 text-slate-400 hover:text-cyan-200 px-2 py-1.5 rounded-md transition-colors"
+                >
+                  <Eye className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={handleHideAllSequences}
+                  title="Hide every sequence from the graph"
+                  aria-label="Hide all sequences"
+                  className="shrink-0 bg-[#0b1016] hover:bg-[#172230] border border-white/10 text-slate-400 hover:text-cyan-200 px-2 py-1.5 rounded-md transition-colors"
+                >
+                  <EyeOff className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              <div className="mt-3 pt-3 border-t border-white/10 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                Active: <span className="text-cyan-200">{activeSequence?.label}</span> — Constrained/Ghost, Separation Epsilon, and Search below apply to it.
+              </div>
+              <div className="mt-2 grid grid-cols-2 gap-1 rounded-lg border border-white/10 bg-[#0b1016] p-1">
                 <button
                   onClick={() => { setShotPathReference(null); setLockedShotNotice(null); setShotEditMode(SHOT_MODE_LOCKED); }}
                   title="Reject angle edits before they can make the current code-mode shot invalid."
@@ -2724,19 +3169,81 @@ export default function App() {
       {/* Valid Angle A-B Region pop-up. A single boolean controls mounting,
           so re-clicking "Plot Valid Angle Region" can never spawn a second
           window; it just bumps anglePlotRequestId to refresh the one that
-          exists. `validateLockedAngleCandidate` is passed through unchanged
-          so the plot's generator calls the exact same constraint check the
-          Angle A/B inputs above already use. */}
+          exists. Every sequence row is passed through so every visible one
+          can be plotted together; `buildValidateCandidateForSequence` lets
+          the window build the same constraint check the Angle A/B inputs
+          above use, for any row's own sequence text. */}
       {isAnglePlotOpen && (
         <AnglePlotWindow
+          sequences={sequences}
+          activeSequenceId={activeSequenceId}
           angleParams={angleParams}
           baseLength={Number(angleParams.length) || 0}
-          validateCandidate={validateLockedAngleCandidate}
+          buildValidateCandidateForSequence={buildValidateCandidateForSequence}
           refreshToken={anglePlotRequestId}
           onClose={() => setIsAnglePlotOpen(false)}
+          onShowAll={handleShowAllSequences}
+          onHideAll={handleHideAllSequences}
           theme={theme}
-          angleStepInput={angleIncrementInput}
         />
+      )}
+
+      {/* Plain-English error pop-up for a rejected sequence/angle apply
+          (Feature 6): no console-only feedback, and no app-provided modal
+          system existed to reuse, so this is a small self-contained one. */}
+      {errorModal && (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4"
+          onClick={closeErrorModal}
+          onKeyDown={e => { if (e.key === 'Escape') closeErrorModal(); }}
+        >
+          <div
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="sequence-error-title"
+            aria-describedby="sequence-error-message"
+            onClick={e => e.stopPropagation()}
+            className="w-full max-w-sm bg-[#151c24] border border-red-400/30 rounded-lg shadow-[0_20px_60px_rgba(0,0,0,0.55)] p-4"
+          >
+            <h3 id="sequence-error-title" className="text-sm font-bold text-red-200 mb-3 flex items-center gap-1.5">
+              <AlertTriangle className="w-4 h-4 shrink-0" /> {errorModal.title}
+            </h3>
+            <div id="sequence-error-message" className="text-xs text-slate-300 leading-relaxed mb-4 space-y-3">
+              {errorModal.sections.map((section, i) => (
+                <div key={i}>
+                  <div className="text-[10px] uppercase tracking-wider font-bold text-slate-500 mb-0.5">{section.heading}</div>
+                  {section.list ? (
+                    <ul className="list-disc pl-4 space-y-0.5">
+                      {section.list.map((item, j) => <li key={j}>{item}</li>)}
+                    </ul>
+                  ) : (
+                    <div className="whitespace-pre-line">{section.text}</div>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const flat = errorModal.sections.map(s => `${s.heading}:\n${s.text || (s.list || []).map(item => `• ${item}`).join('\n')}`).join('\n\n');
+                  navigator.clipboard?.writeText(`${errorModal.title}\n\n${flat}`).catch(() => {});
+                }}
+                className="bg-[#0b1016] hover:bg-[#172230] border border-white/10 text-slate-300 px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-colors"
+              >
+                Copy error details
+              </button>
+              <button
+                type="button"
+                autoFocus
+                onClick={closeErrorModal}
+                className="bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-100 px-3 py-1.5 rounded-md text-[11px] font-bold transition-colors"
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Theme-aware scrollbar styling */}

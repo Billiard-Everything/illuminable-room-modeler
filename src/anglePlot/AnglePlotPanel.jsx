@@ -1,15 +1,33 @@
 import { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHandle } from 'react';
 import { formatAngleDegrees } from './AnglePair.js';
 import { MIN_CELL_SIZE_PX, MAX_CELL_SIZE_PX, MIN_VISIBLE_GRID_STEPS, ABSOLUTE_MAX_ZOOM_PX_PER_DEGREE } from './renderSamplingPolicy.js';
+import { findPointsNearScreenPosition } from './multiSeriesHover.js';
 
-// AnglePlotPanel: draws the scatter of valid (A, B) points and owns all
-// zoom/pan/hover interaction for the graph. Implemented with a plain
-// <canvas> instead of SVG because the region can contain on the order of
-// 10^5 points (the full permitted A/B grid at a fine step) — rendering
-// that many individual SVG DOM nodes would be far slower than letting the
-// canvas rasterize them directly. No charting library exists in this
-// project (checked package.json before writing this), so this is the
-// "lightweight custom panel" option rather than adding a dependency.
+// AnglePlotPanel: draws the scatter of every visible sequence's valid
+// (A, B) region and owns all zoom/pan/hover interaction for the graph.
+// Implemented with a plain <canvas> instead of SVG because a single
+// region can already contain on the order of 10^5 points (the full
+// permitted A/B grid at a fine step) — rendering that many individual SVG
+// DOM nodes would be far slower than letting the canvas rasterize them
+// directly, and that only gets more true with several such regions drawn
+// at once. No charting library exists in this project (checked
+// package.json before writing this), so this is the "lightweight custom
+// panel" option rather than adding a dependency.
+//
+// Multi-sequence overlap rendering
+// -----------------------------------
+// Each series in `series` is drawn with its own color at partial opacity
+// (OVERLAP_ALPHA below) rather than fully opaque, so two overlapping
+// regions blend into a visibly distinct combined color instead of the
+// later series completely hiding the earlier one — no point position is
+// ever offset to "separate" colors, only the paint's alpha channel
+// changes, so the plotted shapes stay mathematically exact. Draw order is
+// the order `series` arrives in (stable — AnglePlotWindow builds it from
+// the sequence row list's own order), so which series reads as "on top"
+// at a given pixel is deterministic and reproducible, not a render-timing
+// accident. Hover (see findPointsNearScreenPosition) is what actually
+// disambiguates an overlapped point — it reports every series present at
+// that spot, not just whichever one is visually on top.
 
 // Zoom/pan model mirrors the main triangle canvas in App.jsx: `zoom` is
 // screen pixels per degree (the same value is used for both axes so the
@@ -18,6 +36,10 @@ import { MIN_CELL_SIZE_PX, MAX_CELL_SIZE_PX, MIN_VISIBLE_GRID_STEPS, ABSOLUTE_MA
 const MIN_ZOOM = 2;
 const WHEEL_ZOOM_FACTOR = 1.15;
 const POINT_HIT_RADIUS_PX = 7;
+// How close two different series' points must be on screen to be treated
+// as "the same spot" for one combined hover, once the nearest point under
+// the cursor is found (see findPointsNearScreenPosition's doc comment).
+const HOVER_MERGE_RADIUS_PX = 4;
 // Individual-point marker radius used in POINTS mode (see pickRenderMode
 // below) — the "normal" size at that zoom level. DENSE and OCCUPANCY modes
 // compute their own, smaller marker size instead (see the draw effect):
@@ -43,6 +65,10 @@ const POINT_RADIUS_PX = 2.4;
 // only the smoothing job it's for.
 const OCCUPANCY_BLUR_PX = 2.5;
 const OCCUPANCY_BLUR_MIN_CELL_PX = 4;
+// Series are drawn semi-transparent so overlapping regions from different
+// sequences blend into a visibly distinct combined color instead of the
+// topmost series fully hiding the ones under it.
+const OVERLAP_ALPHA = 0.72;
 
 // The view "Reset View" restores — a fixed overview of the whole permitted
 // triangle, independent of whatever is currently plotted. Also used as the
@@ -60,8 +86,8 @@ export const MIN_ZOOM_LEVEL = MIN_ZOOM / DEFAULT_ZOOM;
 // instead of this one always rendering dark regardless of the app's theme
 // toggle.
 const CANVAS_PALETTES = {
-  light: { background: '#f8fafc', gridLine: 'rgba(15,23,42,0.08)', gridAxis: 'rgba(8,145,178,0.45)', tickText: '#64748b', point: 'rgba(8,145,178,0.85)' },
-  dark: { background: '#070b10', gridLine: 'rgba(255,255,255,0.08)', gridAxis: 'rgba(56,189,248,0.45)', tickText: '#64748b', point: 'rgba(56,189,248,0.85)' },
+  light: { background: '#f8fafc', gridLine: 'rgba(15,23,42,0.08)', gridAxis: 'rgba(8,145,178,0.45)', tickText: '#64748b' },
+  dark: { background: '#070b10', gridLine: 'rgba(255,255,255,0.08)', gridAxis: 'rgba(56,189,248,0.45)', tickText: '#64748b' },
 };
 
 const niceGridStepDegrees = (zoom) => {
@@ -72,22 +98,23 @@ const niceGridStepDegrees = (zoom) => {
   return 10;
 };
 
-// The maximum zoom (px/degree) this panel allows, tied to the user's actual
-// Angle Step rather than an arbitrary pixel constant: zooming in further
-// than MIN_VISIBLE_GRID_STEPS worth of that step across the viewport cannot
-// reveal any additional real detail (every point on screen would already be
-// adjacent grid points), so there is nothing gained by allowing it. Falls
-// back to the absolute sanity ceiling when no valid Angle Step is known yet
-// (e.g. before the field has been parsed once).
-const getMaxZoomPxPerDegree = (userStepDegrees, viewportWidthPx) => {
-  if (!Number.isFinite(userStepDegrees) || userStepDegrees <= 0) return ABSOLUTE_MAX_ZOOM_PX_PER_DEGREE;
-  const minVisibleWidth = userStepDegrees * MIN_VISIBLE_GRID_STEPS;
+// The maximum zoom (px/degree) this panel allows, tied to the *finest*
+// visible sequence's Angle Step rather than an arbitrary pixel constant:
+// zooming in further than MIN_VISIBLE_GRID_STEPS worth of the finest step
+// across the viewport cannot reveal any additional real detail for any
+// series (every point on screen would already be adjacent grid points for
+// the series that has the most detail), so there is nothing gained by
+// allowing it. Falls back to the absolute sanity ceiling when no visible
+// series has a valid step yet.
+const getMaxZoomPxPerDegree = (finestUserStepDegrees, viewportWidthPx) => {
+  if (!Number.isFinite(finestUserStepDegrees) || finestUserStepDegrees <= 0) return ABSOLUTE_MAX_ZOOM_PX_PER_DEGREE;
+  const minVisibleWidth = finestUserStepDegrees * MIN_VISIBLE_GRID_STEPS;
   const dynamicMax = Math.max(viewportWidthPx, 1) / Math.max(minVisibleWidth, 1e-12);
   return Math.min(dynamicMax, ABSOLUTE_MAX_ZOOM_PX_PER_DEGREE);
 };
 
-const computeFitView = (points, currentPoint, width, height, maxZoom) => {
-  const all = currentPoint ? [...points, currentPoint] : points;
+const computeFitView = (allPoints, currentPoint, width, height, maxZoom) => {
+  const all = currentPoint ? [...allPoints, currentPoint] : allPoints;
   if (all.length === 0) return { zoom: DEFAULT_ZOOM, pan: DEFAULT_PAN };
   let minA = Infinity, maxA = -Infinity, minB = Infinity, maxB = -Infinity;
   all.forEach((p) => {
@@ -107,13 +134,15 @@ const computeFitView = (points, currentPoint, width, height, maxZoom) => {
   return { zoom, pan: { a: (minA + maxA) / 2, b: (minB + maxB) / 2 } };
 };
 
-// Level-of-detail mode, chosen from how many screen pixels separate
-// adjacent sampled grid points (see pickRenderMode): plenty of room draws
-// individually-distinguishable circles; a tight-but-not-subpixel spacing
-// draws touching/slightly-overlapping markers sized to the gap so the
-// region reads as continuous; sub-pixel spacing switches to filled
-// rectangles ("occupancy cells") sized to the sampling cell so the region
-// reads as a solid raster instead of a sparse dot lattice with visible gaps.
+// Level-of-detail mode, chosen per-series from how many screen pixels
+// separate adjacent sampled grid points (see pickRenderMode): plenty of
+// room draws individually-distinguishable circles; a tight-but-not-
+// subpixel spacing draws touching/slightly-overlapping markers sized to
+// the gap so the region reads as continuous; sub-pixel spacing switches to
+// filled rectangles ("occupancy cells") sized to the sampling cell so the
+// region reads as a solid raster instead of a sparse dot lattice with
+// visible gaps. Each series can be in a different mode at the same time
+// (e.g. one exact-mode series at POINTS while an adaptive one is DENSE).
 const RENDER_MODE = { POINTS: 'points', DENSE: 'dense', OCCUPANCY: 'occupancy' };
 const pickRenderMode = (projectedSpacingPx) => {
   if (projectedSpacingPx >= 6) return RENDER_MODE.POINTS;
@@ -129,16 +158,16 @@ const pickRenderMode = (projectedSpacingPx) => {
 // `onViewChange` is called (undebounced) every time zoom, pan, or the
 // measured canvas size changes, reporting the current world bounds,
 // zoomLevel, and viewport pixel size. AnglePlotWindow owns the actual
-// debounce/regeneration decision (see RENDER_DEBOUNCE_MS in
-// renderSamplingPolicy.js) — this panel stays a "dumb" reporter of its own
-// viewport state so that policy lives in exactly one place.
+// debounce/regeneration decision per row — this panel stays a "dumb"
+// reporter of its own viewport state so that policy lives in exactly one
+// place.
 //
-// `gridStepDegrees` is the world-space spacing of the *current* point set
-// (the user's exact Angle Step in exact mode, or the adaptive render step
-// in adaptive mode) — used only to choose the level-of-detail draw mode
-// above, never to decide what to generate (that's AnglePlotWindow's job).
-// `userStepDegrees` is used only for the Angle-Step-aware zoom cap.
-const AnglePlotPanel = forwardRef(function AnglePlotPanel({ points, currentPoint, theme, isLocked, displayScale, onViewChange, gridStepDegrees, userStepDegrees }, ref) {
+// `series` is `{ id, label, color, points, gridStepDegrees, displayScale }[]`
+// — one entry per currently *visible* sequence row, already generated by
+// AnglePlotWindow. `gridStepDegrees` (per series) picks that series' own
+// level-of-detail draw mode; it is never used to decide what to generate
+// (that's AnglePlotWindow's job).
+const AnglePlotPanel = forwardRef(function AnglePlotPanel({ series, currentPoint, theme, isLocked, onViewChange }, ref) {
   const palette = CANVAS_PALETTES[theme] || CANVAS_PALETTES.dark;
   const containerRef = useRef(null);
   const canvasRef = useRef(null);
@@ -147,8 +176,8 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ points, currentPoint
   const [pan, setPan] = useState(DEFAULT_PAN);
   const [isDragging, setIsDragging] = useState(false);
   const dragStart = useRef({ x: 0, y: 0 });
-  const [hoverPoint, setHoverPoint] = useState(null);
-  const [pinnedPoint, setPinnedPoint] = useState(null);
+  const [hoverMatches, setHoverMatches] = useState([]);
+  const [pinnedMatches, setPinnedMatches] = useState([]);
 
   // Track the container's actual pixel size so the canvas drawing buffer
   // (not just its CSS box) stays sharp after the window is resized.
@@ -165,23 +194,31 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ points, currentPoint
     return () => observer.disconnect();
   }, []);
 
-  const maxZoom = getMaxZoomPxPerDegree(userStepDegrees, size.width);
+  const allPoints = series.flatMap((s) => s.points);
+  const finestUserStepDegrees = series.reduce((min, s) => {
+    const step = Number(s.angleStepInput);
+    return Number.isFinite(step) && step > 0 && step < min ? step : min;
+  }, Infinity);
+  const displayScale = series.reduce((max, s) => Math.max(max, s.displayScale || 0), 1);
+
+  const maxZoom = getMaxZoomPxPerDegree(Number.isFinite(finestUserStepDegrees) ? finestUserStepDegrees : undefined, size.width);
   const clampZoom = useCallback((value) => Math.max(MIN_ZOOM, Math.min(value, maxZoom)), [maxZoom]);
 
-  // Fit the viewport to every generated point plus the currently selected
-  // A/B pair on mount, and again any time the panel's real measured size
-  // changes (the initial size is a placeholder until ResizeObserver reports
-  // the actual box). This adjusts state during render (React's documented
-  // pattern for "reset state when a value changes") rather than in a
-  // useEffect, because the reset must happen before the first paint at
-  // this size and must not cascade through an extra render cycle. Explicit
-  // re-fits after that go through the fitToPoints() imperative method below
-  // (the "Fit" button), which does not touch this signature.
+  // Fit the viewport to every generated point (across every visible
+  // series) plus the currently selected A/B pair on mount, and again any
+  // time the panel's real measured size changes (the initial size is a
+  // placeholder until ResizeObserver reports the actual box). This adjusts
+  // state during render (React's documented pattern for "reset state when
+  // a value changes") rather than in a useEffect, because the reset must
+  // happen before the first paint at this size and must not cascade
+  // through an extra render cycle. Explicit re-fits after that go through
+  // the fitToPoints() imperative method below (the "Fit" button), which
+  // does not touch this signature.
   const sizeSignature = `${size.width}x${size.height}`;
   const [appliedSizeSignature, setAppliedSizeSignature] = useState(null);
   if (sizeSignature !== appliedSizeSignature) {
     setAppliedSizeSignature(sizeSignature);
-    const fit = computeFitView(points, currentPoint, size.width, size.height, maxZoom);
+    const fit = computeFitView(allPoints, currentPoint, size.width, size.height, maxZoom);
     setZoom(fit.zoom);
     setPan(fit.pan);
   }
@@ -200,7 +237,8 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ points, currentPoint
     zoomOut: () => { if (!isLocked) setZoom((z) => clampZoom(z / WHEEL_ZOOM_FACTOR)); },
     fitToPoints: () => {
       if (isLocked) return;
-      const fit = computeFitView(points, currentPoint, size.width, size.height, maxZoom);
+      // Empty-graph state: nothing visible to fit to, fall back to the default overview instead of erroring.
+      const fit = computeFitView(allPoints, currentPoint, size.width, size.height, maxZoom);
       setZoom(fit.zoom);
       setPan(fit.pan);
     },
@@ -218,7 +256,7 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ points, currentPoint
       minB: toDataB(size.height),
       maxB: toDataB(0),
     }),
-  }), [isLocked, points, currentPoint, size, maxZoom, clampZoom, toDataA, toDataB]);
+  }), [isLocked, allPoints, currentPoint, size, maxZoom, clampZoom, toDataA, toDataB]);
 
   // Report every zoom/pan/size change (including the very first one, once
   // the real measured canvas size is known) so AnglePlotWindow can debounce
@@ -226,15 +264,12 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ points, currentPoint
   // decides whether/when to regenerate, keeping that policy in one place.
   //
   // `onViewChange` is read through a ref (updated every render, below)
-  // rather than listed in this effect's own dependency array. AnglePlotWindow
-  // rebuilds that callback whenever its own `validateCandidate`/`baseLength`
-  // props change identity — which, in this app, is on nearly every parent
-  // render — and calling it lands a state update back in AnglePlotWindow.
-  // If the effect depended on the callback's identity directly, that state
-  // update would produce a new callback reference, re-running this effect,
-  // calling it again, and so on forever. Depending only on the actual
-  // viewport numbers below breaks that cycle: the effect re-fires on a real
-  // zoom/pan/size change, and always invokes whatever the latest callback is.
+  // rather than listed in this effect's own dependency array, for the same
+  // reason AnglePlotWindow reads several of its own callbacks through refs
+  // — the parent rebuilds this callback on nearly every render, and
+  // depending on its identity directly would re-fire this effect, call it
+  // again, land a state update back in the parent, and repeat forever.
+  // Depending only on the actual viewport numbers below breaks that cycle.
   const onViewChangeRef = useRef(onViewChange);
   onViewChangeRef.current = onViewChange;
   useEffect(() => {
@@ -293,80 +328,72 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ points, currentPoint
       ctx.fillText(formatAngleDegrees(b, displayScale), 4, y - 12);
     }
 
-    // Valid region scatter. The draw mode is picked from how many screen
-    // pixels separate adjacent *sampled* grid points (gridStepDegrees x
-    // zoom, the actual px/degree) — not from the point count — so a sparse
-    // exact-mode result at low zoom and a dense adaptive result at high
-    // zoom both pick the mode that actually matches what's distinguishable
-    // on screen right now. See the RENDER_MODE comment above.
-    //
-    // `orangeRadius` tracks whatever marker size the current mode is
-    // actually using for blue points, instead of always POINT_RADIUS_PX:
-    // once zoomed out into DENSE/OCCUPANCY territory, samples can be just a
-    // pixel or two apart, and a fixed ~2.4px-radius (4.8px) orange dot would
-    // dwarf that texture — visibly blotting out the very region shape it's
-    // supposed to sit on top of. Matching it to the current mode's marker
-    // size keeps it "the same size as a blue point" in every mode, per the
-    // original design intent, rather than one fixed size that only made
-    // sense for POINTS mode.
-    const projectedSpacingPx = Number.isFinite(gridStepDegrees) && gridStepDegrees > 0 ? gridStepDegrees * zoom : Infinity;
-    const mode = pickRenderMode(projectedSpacingPx);
-    ctx.fillStyle = palette.point;
+    // Every visible sequence's region, in row order (stable z-order — see
+    // the module comment above for why overlap uses alpha blending instead
+    // of offsetting point positions). `orangeRadius` tracks whatever marker
+    // size the *last-drawn* series used, so the currentPoint marker (drawn
+    // after the loop) stays visually "the same size as a data point"
+    // instead of one fixed size that only made sense for POINTS mode.
     let orangeRadius = POINT_RADIUS_PX;
-    if (mode === RENDER_MODE.OCCUPANCY) {
-      // Filled squares sized to the sampling cell (with a hair of overlap
-      // so pixel rounding never leaves a one-pixel crack between
-      // neighbors), not large circles over a coarse grid — a solid raster
-      // built only from cells that actually contain a real valid point.
-      // Blurred afterward (see OCCUPANCY_BLUR_PX) so the hard grid-aligned
-      // edges of that raster read as one smooth region instead of a jagged
-      // pixel staircase — a display smoothing pass over real occupied
-      // cells, not fabricated data.
-      const cellPx = Math.min(MAX_CELL_SIZE_PX, Math.max(MIN_CELL_SIZE_PX, projectedSpacingPx));
-      const half = cellPx / 2 + 0.5;
-      orangeRadius = Math.max(1, cellPx / 2);
-      // See OCCUPANCY_BLUR_MIN_CELL_PX above: below that cell size, skip
-      // blur entirely so each real point stays a crisp, individually
-      // positioned mark instead of dissolving into a shared blob.
-      const blurPx = cellPx >= OCCUPANCY_BLUR_MIN_CELL_PX ? Math.min(OCCUPANCY_BLUR_PX, cellPx * 0.4) : 0;
+    for (const s of series) {
+      if (s.points.length === 0) continue;
+      const projectedSpacingPx = Number.isFinite(s.gridStepDegrees) && s.gridStepDegrees > 0 ? s.gridStepDegrees * zoom : Infinity;
+      const mode = pickRenderMode(projectedSpacingPx);
       ctx.save();
-      if (blurPx > 0) ctx.filter = `blur(${blurPx}px)`;
-      points.forEach((p) => {
-        const x = toScreenX(p.a);
-        const y = toScreenY(p.b);
-        if (x < -half || x > size.width + half || y < -half || y > size.height + half) return;
-        ctx.fillRect(x - half, y - half, cellPx + 1, cellPx + 1);
-      });
+      ctx.globalAlpha = OVERLAP_ALPHA;
+      ctx.fillStyle = s.color;
+      if (mode === RENDER_MODE.OCCUPANCY) {
+        // Filled squares sized to the sampling cell (with a hair of
+        // overlap so pixel rounding never leaves a one-pixel crack between
+        // neighbors), not large circles over a coarse grid — a solid
+        // raster built only from cells that actually contain a real valid
+        // point. Blurred afterward (see OCCUPANCY_BLUR_PX) so the hard
+        // grid-aligned edges of that raster read as one smooth region
+        // instead of a jagged pixel staircase.
+        const cellPx = Math.min(MAX_CELL_SIZE_PX, Math.max(MIN_CELL_SIZE_PX, projectedSpacingPx));
+        const half = cellPx / 2 + 0.5;
+        orangeRadius = Math.max(1, cellPx / 2);
+        const blurPx = cellPx >= OCCUPANCY_BLUR_MIN_CELL_PX ? Math.min(OCCUPANCY_BLUR_PX, cellPx * 0.4) : 0;
+        if (blurPx > 0) ctx.filter = `blur(${blurPx}px)`;
+        s.points.forEach((p) => {
+          const x = toScreenX(p.a);
+          const y = toScreenY(p.b);
+          if (x < -half || x > size.width + half || y < -half || y > size.height + half) return;
+          ctx.fillRect(x - half, y - half, cellPx + 1, cellPx + 1);
+        });
+      } else if (mode === RENDER_MODE.DENSE) {
+        // Markers sized to touch/slightly overlap their neighbors instead
+        // of leaving the fixed small POINTS-mode radius floating in
+        // visible gaps.
+        const radius = Math.min(MAX_CELL_SIZE_PX / 2, Math.max(MIN_CELL_SIZE_PX / 2, projectedSpacingPx / 2 + 0.5));
+        orangeRadius = radius;
+        s.points.forEach((p) => {
+          const x = toScreenX(p.a);
+          const y = toScreenY(p.b);
+          if (x < -radius - 5 || x > size.width + radius + 5 || y < -radius - 5 || y > size.height + radius + 5) return;
+          ctx.beginPath();
+          ctx.arc(x, y, radius, 0, Math.PI * 2);
+          ctx.fill();
+        });
+      } else {
+        orangeRadius = POINT_RADIUS_PX;
+        s.points.forEach((p) => {
+          const x = toScreenX(p.a);
+          const y = toScreenY(p.b);
+          if (x < -5 || x > size.width + 5 || y < -5 || y > size.height + 5) return;
+          ctx.beginPath();
+          ctx.arc(x, y, POINT_RADIUS_PX, 0, Math.PI * 2);
+          ctx.fill();
+        });
+      }
       ctx.restore();
-    } else if (mode === RENDER_MODE.DENSE) {
-      // Markers sized to touch/slightly overlap their neighbors instead of
-      // leaving the fixed small POINTS-mode radius floating in visible gaps.
-      const radius = Math.min(MAX_CELL_SIZE_PX / 2, Math.max(MIN_CELL_SIZE_PX / 2, projectedSpacingPx / 2 + 0.5));
-      orangeRadius = radius;
-      points.forEach((p) => {
-        const x = toScreenX(p.a);
-        const y = toScreenY(p.b);
-        if (x < -radius - 5 || x > size.width + radius + 5 || y < -radius - 5 || y > size.height + radius + 5) return;
-        ctx.beginPath();
-        ctx.arc(x, y, radius, 0, Math.PI * 2);
-        ctx.fill();
-      });
-    } else {
-      points.forEach((p) => {
-        const x = toScreenX(p.a);
-        const y = toScreenY(p.b);
-        if (x < -5 || x > size.width + 5 || y < -5 || y > size.height + 5) return;
-        ctx.beginPath();
-        ctx.arc(x, y, POINT_RADIUS_PX, 0, Math.PI * 2);
-        ctx.fill();
-      });
     }
 
-    // Currently committed A/B pair: sized to match whatever the current LOD
-    // mode is using for blue points (see orangeRadius above), always drawn
-    // sharp (no blur, even in OCCUPANCY mode — ctx.filter was already reset
-    // by ctx.restore() above) and after the blue region so it's never
-    // hidden inside it — only the orange fill color sets it apart.
+    // Currently committed A/B pair for the active sequence: sized to match
+    // whatever the last-drawn series used for its own points (orangeRadius
+    // above), always drawn sharp (no blur — ctx.filter was already reset
+    // by ctx.restore() above) and after every series so it's never hidden
+    // inside a region — only its fixed orange fill sets it apart.
     if (currentPoint) {
       const x = toScreenX(currentPoint.a);
       const y = toScreenY(currentPoint.b);
@@ -376,35 +403,34 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ points, currentPoint
       ctx.fill();
     }
 
-    // Hovered/pinned point marker.
-    const active = hoverPoint || pinnedPoint;
-    if (active) {
-      const x = toScreenX(active.a);
-      const y = toScreenY(active.b);
-      ctx.strokeStyle = palette.tickText;
+    // Hovered/pinned marker ring(s) — one ring per matched series so an
+    // overlapped hover visibly shows more than one outline.
+    const activeMatches = pinnedMatches.length > 0 ? pinnedMatches : hoverMatches;
+    if (activeMatches.length > 0) {
       ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.arc(x, y, 6, 0, Math.PI * 2);
-      ctx.stroke();
+      activeMatches.forEach((match, idx) => {
+        const x = toScreenX(match.a);
+        const y = toScreenY(match.b);
+        ctx.strokeStyle = palette.tickText;
+        ctx.beginPath();
+        ctx.arc(x, y, 6 + idx * 2.5, 0, Math.PI * 2);
+        ctx.stroke();
+      });
     }
-  }, [points, currentPoint, size, zoom, pan, hoverPoint, pinnedPoint, toScreenX, toScreenY, toDataA, toDataB, palette, displayScale, gridStepDegrees]);
+  }, [series, currentPoint, size, zoom, pan, hoverMatches, pinnedMatches, toScreenX, toScreenY, toDataA, toDataB, palette, displayScale]);
 
-  const findNearestPoint = useCallback((screenX, screenY) => {
-    const all = currentPoint ? [...points, currentPoint] : points;
-    let nearest = null;
-    let nearestDistSq = POINT_HIT_RADIUS_PX * POINT_HIT_RADIUS_PX;
-    for (let i = 0; i < all.length; i++) {
-      const p = all[i];
-      const dx = toScreenX(p.a) - screenX;
-      const dy = toScreenY(p.b) - screenY;
-      const distSq = dx * dx + dy * dy;
-      if (distSq < nearestDistSq) {
-        nearestDistSq = distSq;
-        nearest = p;
-      }
-    }
-    return nearest;
-  }, [points, currentPoint, toScreenX, toScreenY]);
+  // Every plotted series (real data + the currentPoint pseudo-series) is
+  // searched together so a hover over an overlapped spot reports every
+  // sequence present there, not just whichever one happened to draw last.
+  const hitTestSeries = [
+    ...series.map((s) => ({ id: s.id, label: s.label, color: s.color, points: s.points })),
+    ...(currentPoint ? [{ id: '__current__', label: 'Current (active)', color: '#f97316', points: [currentPoint] }] : []),
+  ];
+
+  const findMatchesAt = useCallback((screenX, screenY) => (
+    findPointsNearScreenPosition(hitTestSeries, toScreenX, toScreenY, screenX, screenY, POINT_HIT_RADIUS_PX, HOVER_MERGE_RADIUS_PX)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  ), [series, currentPoint, toScreenX, toScreenY]);
 
   // The wheel listener is attached natively (not via React's onWheel prop)
   // because React registers wheel handlers as passive by default, which
@@ -443,7 +469,7 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ points, currentPoint
       setPan((prev) => ({ a: prev.a - dx, b: prev.b + dy }));
       dragStart.current = { x: e.clientX, y: e.clientY };
     } else {
-      setHoverPoint(findNearestPoint(screenX, screenY));
+      setHoverMatches(findMatchesAt(screenX, screenY));
     }
   };
 
@@ -451,11 +477,11 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ points, currentPoint
 
   const handleClick = (e) => {
     const rect = containerRef.current.getBoundingClientRect();
-    const found = findNearestPoint(e.clientX - rect.left, e.clientY - rect.top);
-    setPinnedPoint(found);
+    setPinnedMatches(findMatchesAt(e.clientX - rect.left, e.clientY - rect.top));
   };
 
-  const tooltipPoint = pinnedPoint || hoverPoint;
+  const tooltipMatches = pinnedMatches.length > 0 ? pinnedMatches : hoverMatches;
+  const tooltipAnchor = tooltipMatches[0];
 
   return (
     <div className="flex flex-col h-full w-full min-h-0 min-w-0">
@@ -474,14 +500,36 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ points, currentPoint
           onClick={handleClick}
         >
           <canvas ref={canvasRef} className="block" />
-          {tooltipPoint && (
+          {series.length === 0 && (
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-[11px] font-bold uppercase tracking-wider text-slate-600">
+              No visible graphs — enable a sequence to plot it here
+            </div>
+          )}
+          {tooltipAnchor && (
             <div
-              className="pointer-events-none absolute bg-[#101820]/95 border border-white/10 rounded-md px-2.5 py-1.5 text-[11px] font-mono text-slate-200 shadow-[0_8px_24px_rgba(0,0,0,0.32)]"
-              style={{ left: Math.min(toScreenX(tooltipPoint.a) + 12, size.width - 140), top: Math.max(toScreenY(tooltipPoint.b) - 54, 4) }}
+              className="pointer-events-none absolute bg-[#101820]/95 border border-white/10 rounded-md px-2.5 py-1.5 text-[11px] font-mono text-slate-200 shadow-[0_8px_24px_rgba(0,0,0,0.32)] space-y-1.5"
+              style={{ left: Math.min(toScreenX(tooltipAnchor.a) + 12, size.width - 190), top: Math.max(toScreenY(tooltipAnchor.b) - 16 - tooltipMatches.length * 44, 4) }}
             >
-              <div>A = {formatAngleDegrees(tooltipPoint.a, displayScale)}&deg;</div>
-              <div>B = {formatAngleDegrees(tooltipPoint.b, displayScale)}&deg;</div>
-              <div className="text-slate-400">A+B = {formatAngleDegrees(tooltipPoint.a + tooltipPoint.b, displayScale)}&deg;</div>
+              {tooltipMatches.length > 1 && (
+                <div className="text-slate-400 text-[10px] font-bold uppercase tracking-wider">{tooltipMatches.length} graphs at this point</div>
+              )}
+              {tooltipMatches.map((match) => {
+                const sourceSeries = series.find((s) => s.id === match.id);
+                return (
+                  <div key={match.id} className="border-t border-white/10 first:border-t-0 pt-1 first:pt-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: match.color }} />
+                      <span className="font-bold">{match.label}</span>
+                    </div>
+                    <div>A = {formatAngleDegrees(match.a, sourceSeries?.displayScale || displayScale)}&deg;</div>
+                    <div>B = {formatAngleDegrees(match.b, sourceSeries?.displayScale || displayScale)}&deg;</div>
+                    <div className="text-slate-400">A+B = {formatAngleDegrees(match.a + match.b, sourceSeries?.displayScale || displayScale)}&deg;</div>
+                    {sourceSeries && (
+                      <div className="text-slate-500">Step {sourceSeries.angleStepInput}&deg; · {sourceSeries.mode === 'exact' ? 'Exact' : sourceSeries.mode === 'adaptive' ? 'Adaptive' : '—'}</div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
