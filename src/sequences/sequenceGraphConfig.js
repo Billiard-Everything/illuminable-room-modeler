@@ -75,26 +75,53 @@ export const isValidHexColor = (hex) => typeof hex === 'string' && /^#[0-9a-fA-F
  * ignored and runs of multiple spaces/tabs/newlines collapse to one
  * separator, so pasted text with tabs or line breaks parses the same way as
  * manually-typed single spaces.
+ *
+ * On failure, returns a structured `sections` array (heading + text, or
+ * heading + list) instead of one flat string, so the error dialog can show
+ * "Problem" / "How to fix it" / "Example" as clearly separated blocks — see
+ * App.jsx's error-modal renderer. There is no fixed enum of "supported
+ * codes" in this program (a code is any positive whole-number run length,
+ * not a small closed set), so failures here are only ever about *format*
+ * (not whole-number, not positive) — never a fabricated "unsupported code"
+ * list that doesn't correspond to a real rule.
  */
 export const parseSequenceDraftText = (rawText) => {
   const trimmed = (rawText || '').trim();
   if (!trimmed) {
-    return { valid: false, title: 'Empty sequence', message: 'The sequence cannot be empty.\nEnter at least one valid code.' };
+    return {
+      valid: false,
+      title: 'The sequence cannot be empty',
+      sections: [
+        { heading: 'Problem', text: 'No codes were entered.' },
+        { heading: 'How to fix it', text: 'Enter at least one whole-number code, separated by spaces.' },
+        { heading: 'Example', text: '4 4 4' },
+      ],
+    };
   }
   const tokens = trimmed.split(/\s+/).filter(Boolean);
-  for (const token of tokens) {
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    const position = i + 1;
     if (!/^\d+$/.test(token)) {
       return {
         valid: false,
-        title: 'Invalid character',
-        message: `The sequence contains an invalid value: "${token}".\nPlease enter whole-number codes separated by spaces, for example:\n3 1 2 4`,
+        title: 'Unable to read the sequence',
+        sections: [
+          { heading: 'Problem', text: `"${token}" at position ${position} is not a valid code.` },
+          { heading: 'How to fix it', text: 'Enter whole-number codes separated by spaces (no letters, decimals, or symbols).' },
+          { heading: 'Example', text: '4 4 4' },
+        ],
       };
     }
     if (Number(token) <= 0) {
       return {
         valid: false,
-        title: 'Invalid code',
-        message: `Code "${token}" is not valid: each code must be a whole number greater than zero.\nExample: 3 1 2 4`,
+        title: 'Unable to apply this sequence',
+        sections: [
+          { heading: 'Problem', text: `Code "${token}" at position ${position} must be a whole number greater than zero.` },
+          { heading: 'How to fix it', text: 'Replace it with a positive whole number (1 or higher).' },
+          { heading: 'Example', text: '3 1 2 4' },
+        ],
       };
     }
   }

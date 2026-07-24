@@ -1397,8 +1397,11 @@ export default function App() {
   // genuinely shared across every row — Angle A/B now live per-row (see
   // `sequences` below) so each row can have its own main-canvas point.
   const [baseTriangleLength, setBaseTriangleLength] = useState(10);
-  // Angle increment controls the native number-stepper amount for Angle A and Angle B.
-  const [angleIncrementInput, setAngleIncrementInput] = useState(String(DEFAULT_ANGLE_INCREMENT));
+  // Increment for the Angle A/B number-stepper arrows, and the default
+  // Angle Step given to newly-added sequences. No longer user-editable (the
+  // visible "A/B Spinner" control was removed as confusing); fixed at its
+  // default rather than left as dead state.
+  const angleIncrementInput = String(DEFAULT_ANGLE_INCREMENT);
   // This separate increment controls the native stepper attached to the Angle Step field itself.
   const [angleStepControlIncrementInput, setAngleStepControlIncrementInput] = useState(String(DEFAULT_ANGLE_STEP_CONTROL_INCREMENT));
   // Coordinate defaults create a right-ish triangle for immediate manual testing.
@@ -1576,6 +1579,12 @@ export default function App() {
     // Resolve the independently configurable native increment for the Angle Step control.
     return resolvePositiveInputStep(angleStepControlIncrementInput, DEFAULT_ANGLE_STEP_CONTROL_INCREMENT);
   }, [angleStepControlIncrementInput]);
+
+  // Validity of the active row's own Angle Step, shown next to the single
+  // main-control editor for it (the per-row list only displays this value).
+  const activeRowParsedStep = useMemo(() => parseAngleStep(activeSequence?.angleStepInput ?? ''), [activeSequence?.angleStepInput]);
+  const activeRowStepValid = activeRowParsedStep.valid;
+  const activeRowStepError = activeRowParsedStep.error;
 
   const formatFixed = (value) => {
     // Non-finite geometry values should be visible instead of throwing in toFixed().
@@ -1806,6 +1815,13 @@ export default function App() {
     if (!hasCompleteAngleParams(candidateParams)) return { allowed: false, reason: 'angle input is incomplete' };
     // Non-triangular inputs are rejected in Constrained mode because they destroy the shot.
     if (!hasValidAngleTriangle(candidateParams)) return { allowed: false, reason: 'triangle angles are invalid' };
+    // Same A < B, A + B <= 90 domain restriction the "Valid Angle A-B
+    // Region" graph already enforces (see angleValidation.js), now applied
+    // to live edits too so the two notions of "valid A/B" never disagree.
+    const candidateA = Number(candidateParams.a);
+    const candidateB = Number(candidateParams.b);
+    if (candidateA >= candidateB) return { allowed: false, reason: 'Angle A must be smaller than Angle B' };
+    if (candidateA + candidateB > 90) return { allowed: false, reason: 'Angle A and Angle B must sum to at most 90°' };
 
     // Build the candidate triangle without committing it to React state.
     const candidateTriangle = buildBaseTriangle('angles', baseCoordsInput, candidateParams);
@@ -1862,6 +1878,33 @@ export default function App() {
     return { allowed: true };
   };
 
+  // Builds the detailed, plain-English explanation shown inline when a live
+  // Angle A/B/Length edit is rejected. Deliberately NOT a modal: these
+  // inputs commit on every keystroke (for immediate visual feedback), and a
+  // typical multi-digit edit passes through several transiently-invalid
+  // states (e.g. typing "23" one digit at a time) — a pop-up on every one
+  // of those would make the fields nearly unusable. The full detail still
+  // needs to be visible, just without blocking typing.
+  const describeAngleRejection = (field, value, reason) => {
+    const isLengthField = field === 'length';
+    const currentA = Number(field === 'a' ? value : angleParams.a);
+    const currentB = Number(field === 'b' ? value : angleParams.b);
+    const knownReasonFixes = {
+      'angle input is incomplete': 'Finish entering a numeric value for every field.',
+      'triangle angles are invalid': 'Enter positive angles whose sum stays under 180°, with a positive base length.',
+      'Angle A must be smaller than Angle B': 'Increase Angle B or decrease Angle A so Angle A is smaller.',
+      'Angle A and Angle B must sum to at most 90°': 'Reduce Angle A or Angle B so their sum is at most 90°.',
+    };
+    const requiredConstraints = isLengthField
+      ? ['Base Length must be a positive number.']
+      : ['Angle A must be greater than 0°.', 'Angle B must be greater than 0°.', 'Angle A must be smaller than Angle B.', 'Angle A + Angle B must be at most 90°.'];
+    if (!isLengthField && !(reason in knownReasonFixes)) {
+      requiredConstraints.push(`This sequence also requires: ${reason}.`);
+    }
+    const howToFix = knownReasonFixes[reason] || `Adjust the value so this sequence's unfolding stays valid (${reason}).`;
+    return { field, value, reason, isLengthField, currentA, currentB, requiredConstraints, howToFix };
+  };
+
   // Edits the Angle A/B/Length panel used by the main canvas and the
   // Constrained/Ghost/Search tools below — always operating on the
   // *active* row's angles (Angle A/B) or the one shared base length,
@@ -1873,8 +1916,8 @@ export default function App() {
     const guard = validateLockedAngleCandidate(candidateParams);
     // Reject invalid candidates before they change the rendered geometry.
     if (!guard.allowed) {
-      // Store the blocked field/value and first line-test reason.
-      setLockedShotNotice({ field, value, reason: guard.reason });
+      // Store the full structured explanation of the blocked edit.
+      setLockedShotNotice(describeAngleRejection(field, value, guard.reason));
       // Leave angleParams unchanged so the last valid geometry remains active.
       return;
     }
@@ -1887,49 +1930,6 @@ export default function App() {
       const rowField = field === 'a' ? 'angleA' : 'angleB';
       setSequences(rows => rows.map(row => row.id === activeSequenceId ? { ...row, [rowField]: value, validationError: null } : row));
     }
-  };
-
-  // Per-row equivalent of handleAngleParamChange for the small Angle A/B
-  // inputs on each sequence row. Editing the active row's A/B here is
-  // identical to editing the big panel above (same Constrained/Ghost guard,
-  // same lockedShotNotice banner) since they edit the same underlying
-  // value. Editing a *non*-active row has no rendered shot to protect, so
-  // it's guarded with the same A>0, B>0, A<B, A+B<=90 rule the "Valid Angle
-  // A-B Region" graph already uses for that row (see angleValidation.js's
-  // isValidAnglePair), plus that row's own blue/black-line/tower validity
-  // via buildValidateCandidateForSequence — checked in the same cheapest-
-  // first order so the reported reason matches the actual failure.
-  const handleRowAngleChange = (id, field, value) => {
-    if (id === activeSequenceId) {
-      handleAngleParamChange(field, value);
-      return;
-    }
-    const row = sequences.find(r => r.id === id);
-    if (!row) return;
-    const candidateA = field === 'a' ? Number(value) : Number(row.angleA);
-    const candidateB = field === 'b' ? Number(value) : Number(row.angleB);
-    // Cheap geometric checks first, so the message matches the actual
-    // failure instead of always blaming A<B/sum<=90 even when those already
-    // hold and the real problem is a deeper path/tower-validity failure.
-    let reason = null;
-    if (!Number.isFinite(candidateA) || !Number.isFinite(candidateB) || candidateA <= 0 || candidateB <= 0) {
-      reason = 'Angle A and Angle B must both be positive numbers.';
-    } else if (candidateA >= candidateB) {
-      reason = 'Angle A must be smaller than Angle B.';
-    } else if (candidateA + candidateB > 90) {
-      reason = 'Angle A and Angle B must sum to at most 90°.';
-    } else {
-      const validateCandidate = buildValidateCandidateForSequence(row.sequenceText, { a: row.angleA, b: row.angleB, length: angleParams.length });
-      const result = validateCandidate({ a: candidateA, b: candidateB, length: angleParams.length });
-      if (!result.allowed) reason = result.reason;
-    }
-    if (reason) {
-      const message = `This sequence cannot be applied because Angle A and Angle B are invalid.\n${reason}`;
-      setSequences(rows => rows.map(r => r.id === id ? { ...r, validationError: message } : r));
-      setErrorModal({ title: 'Invalid angles', message, focusId: null });
-      return;
-    }
-    setSequences(rows => rows.map(r => r.id === id ? { ...r, angleA: candidateA, angleB: candidateB, validationError: null } : r));
   };
 
   const handleOpenAnglePlot = () => {
@@ -2025,8 +2025,9 @@ export default function App() {
     if (row.draftSequenceText === row.sequenceText) return;
     const parsed = parseSequenceDraftText(row.draftSequenceText);
     if (!parsed.valid) {
-      setSequences(rows => rows.map(r => r.id === id ? { ...r, validationError: parsed.message } : r));
-      setErrorModal({ title: parsed.title, message: parsed.message, focusId: id });
+      const flat = parsed.sections.map(s => `${s.heading}:\n${s.text || (s.list || []).map(item => `• ${item}`).join('\n')}`).join('\n\n');
+      setSequences(rows => rows.map(r => r.id === id ? { ...r, validationError: flat } : r));
+      setErrorModal({ title: parsed.title, sections: parsed.sections, focusId: id });
       return;
     }
     setSequences(rows => rows.map(r => r.id === id ? { ...r, sequenceText: r.draftSequenceText, validationError: null } : r));
@@ -2309,12 +2310,15 @@ export default function App() {
                     type="number"
                     min="0"
                     step={angleStepControlIncrement}
-                    value={angleIncrementInput}
-                    onChange={e => setAngleIncrementInput(e.target.value)}
-                    title={`Increment for the Angle A/B number steppers and exact plot grid. Its own native step is ${angleStepControlIncrement}.`}
-                    className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2.5 py-1.5 text-sm focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 transition-all"
+                    value={activeSequence?.angleStepInput ?? ''}
+                    onChange={e => handleSequenceAngleStepChange(activeSequenceId, e.target.value)}
+                    title={`Grid step for ${activeSequence?.label ?? 'the active sequence'}'s own "Valid Angle A-B Region" graph. This is the single editing location for this value — the row list below only displays it.`}
+                    className={`w-full bg-[#0b1016] border rounded-md px-2.5 py-1.5 text-sm focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 transition-all ${activeRowStepValid ? 'border-white/10' : 'border-red-400/50'}`}
                   />
                 </div>
+                {!activeRowStepValid && (
+                  <div className="text-[10px] text-red-300 mt-1 pl-16">{activeRowStepError}</div>
+                )}
                 <div className="flex items-center gap-2">
                   <span className="text-[11px] font-bold text-slate-500 w-16 text-right mr-1">Step Increment</span>
                   <input
@@ -2327,9 +2331,24 @@ export default function App() {
                     className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2.5 py-1.5 text-sm focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 transition-all"
                   />
                 </div>
+                {/* The old "A/B Spinner" field (angleIncrementInput) is no
+                    longer shown — it was a confusing extra control. Its
+                    value is kept internally at its default and still
+                    supplies the Angle A/B number-stepper increment and new
+                    row's default Angle Step; only the visible editor for it
+                    was removed. */}
                 {lockedShotNotice && (
-                  <div className="text-[10px] text-amber-100 mt-1 pl-16 font-medium bg-amber-500/10 rounded py-1.5 px-2 border border-amber-300/20">
-                    Constrained blocked {lockedShotNotice.field}={lockedShotNotice.value}: {lockedShotNotice.reason}.
+                  <div className="text-[10px] text-amber-100 mt-1 font-medium bg-amber-500/10 rounded py-1.5 px-2 border border-amber-300/20 space-y-1">
+                    <div className="font-bold">
+                      {lockedShotNotice.isLengthField ? 'Base Length' : lockedShotNotice.field === 'a' ? 'Angle A' : 'Angle B'} of {lockedShotNotice.value} was not applied.
+                    </div>
+                    {!lockedShotNotice.isLengthField && (
+                      <div>Current values: Angle A {lockedShotNotice.currentA}&deg;, Angle B {lockedShotNotice.currentB}&deg;</div>
+                    )}
+                    <ul className="list-disc pl-4 space-y-0.5">
+                      {lockedShotNotice.requiredConstraints.map((c, i) => <li key={i}>{c}</li>)}
+                    </ul>
+                    <div><span className="font-bold">How to fix it:</span> {lockedShotNotice.howToFix}</div>
                   </div>
                 )}
                 {(Number(angleParams.a) + Number(angleParams.b) >= 180) && (
@@ -2466,36 +2485,8 @@ export default function App() {
                           title={`Choose ${row.label}'s dot/legend color`}
                           className="w-3.5 h-3.5 shrink-0 rounded-full border border-black/30 p-0 bg-transparent cursor-pointer appearance-none overflow-hidden"
                         />
-                        <span className={`text-[10px] font-bold shrink-0 w-[52px] truncate ${isActive ? 'text-cyan-200' : 'text-slate-400'}`}>{row.label}</span>
-                        <input
-                          type="text"
-                          ref={el => { sequenceInputRefsRef.current[row.id] = el; }}
-                          value={row.draftSequenceText}
-                          onChange={e => handleSequenceDraftChange(row.id, e.target.value)}
-                          onClick={e => e.stopPropagation()}
-                          onFocus={() => handleSelectActiveSequence(row.id)}
-                          onKeyDown={e => {
-                            e.stopPropagation();
-                            if (e.key === 'Enter') { e.preventDefault(); handleApplySequenceDraft(row.id); }
-                            else if (e.key === 'Escape') { e.preventDefault(); handleCancelSequenceDraft(row.id); e.currentTarget.blur(); }
-                          }}
-                          onBlur={() => handleApplySequenceDraft(row.id)}
-                          placeholder="e.g. 1 5 16 5 1 2 3 6"
-                          aria-label={`${row.label} sequence text`}
-                          title="Type freely, including spaces. Press Enter to apply, Escape to discard the edit."
-                          className="flex-1 min-w-0 bg-transparent text-[11px] font-mono text-slate-100 outline-none placeholder:text-slate-600 truncate"
-                        />
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.0001"
-                          value={row.angleStepInput}
-                          onChange={e => handleSequenceAngleStepChange(row.id, e.target.value)}
-                          onClick={e => e.stopPropagation()}
-                          aria-label={`${row.label} Angle Step`}
-                          title={parsedStep.valid ? `Angle Step for ${row.label}'s own graph (${modeLabel} mode)` : `Angle Step error: ${parsedStep.error}`}
-                          className={`w-14 shrink-0 bg-[#0b1016] border rounded px-1 py-0.5 text-[10px] font-mono outline-none ${parsedStep.valid ? 'border-white/10 text-slate-200' : 'border-red-400/50 text-red-200'}`}
-                        />
+                        <span className={`text-[10px] font-bold shrink-0 ${isActive ? 'text-cyan-200' : 'text-slate-400'}`}>{row.label}</span>
+                        <span className="flex-1" />
                         <button
                           type="button"
                           onClick={e => { e.stopPropagation(); handleDuplicateSequence(row.id); }}
@@ -2515,36 +2506,57 @@ export default function App() {
                           <Trash2 className="w-3 h-3" />
                         </button>
                       </div>
-                      <div className="flex items-center gap-1.5 mt-1 pl-[18px]">
-                        <span className="text-[10px] font-bold text-slate-500">A</span>
-                        <input
-                          type="number"
-                          value={row.angleA}
-                          onChange={e => handleRowAngleChange(row.id, 'a', e.target.value)}
-                          onClick={e => e.stopPropagation()}
-                          aria-label={`${row.label} Angle A`}
-                          title={`${row.label}'s own Angle A (degrees)`}
-                          className="w-14 shrink-0 bg-[#0b1016] border border-white/10 rounded px-1 py-0.5 text-[10px] font-mono text-slate-200 outline-none"
-                        />
-                        <span className="text-[10px] font-bold text-slate-500">B</span>
-                        <input
-                          type="number"
-                          value={row.angleB}
-                          onChange={e => handleRowAngleChange(row.id, 'b', e.target.value)}
-                          onClick={e => e.stopPropagation()}
-                          aria-label={`${row.label} Angle B`}
-                          title={`${row.label}'s own Angle B (degrees)`}
-                          className="w-14 shrink-0 bg-[#0b1016] border border-white/10 rounded px-1 py-0.5 text-[10px] font-mono text-slate-200 outline-none"
-                        />
-                        <span className={`text-[9px] font-bold ml-1 ${rowStatus === 'Ready' ? 'text-emerald-300' : rowStatus === 'Editing…' ? 'text-amber-300' : rowStatus === 'Hidden' ? 'text-slate-600' : 'text-red-300'}`}>
+                      {/* Full-width sequence field on its own line so long
+                          codes are actually readable instead of clipped
+                          beside four other controls. */}
+                      <input
+                        type="text"
+                        ref={el => { sequenceInputRefsRef.current[row.id] = el; }}
+                        value={row.draftSequenceText}
+                        onChange={e => handleSequenceDraftChange(row.id, e.target.value)}
+                        onClick={e => e.stopPropagation()}
+                        onFocus={() => handleSelectActiveSequence(row.id)}
+                        onKeyDown={e => {
+                          e.stopPropagation();
+                          if (e.key === 'Enter') { e.preventDefault(); handleApplySequenceDraft(row.id); }
+                          else if (e.key === 'Escape') { e.preventDefault(); handleCancelSequenceDraft(row.id); e.currentTarget.blur(); }
+                        }}
+                        onBlur={() => handleApplySequenceDraft(row.id)}
+                        placeholder="e.g. 1 5 16 5 1 2 3 6"
+                        aria-label={`${row.label} sequence text`}
+                        title="Type freely, including spaces. Press Enter to apply, Escape to discard the edit."
+                        className="mt-1.5 w-full bg-[#080b0f] border border-white/10 rounded px-2 py-1 text-[11px] font-mono text-slate-100 outline-none placeholder:text-slate-600 focus:border-cyan-300/50"
+                      />
+                      {/* Read-only: this sequence's own A/B/Step belong to it
+                          in the data model, but the main controls above are
+                          the only place that edits them (avoids two editors
+                          that can drift out of sync). Its own full-width,
+                          wrapping line so Step is never clipped, with A/B in
+                          a larger, easy-to-scan size. */}
+                      <div
+                        className="flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5 mt-1.5 font-mono"
+                        title="Select this row and use the main controls above to change these."
+                      >
+                        <span className={isActive ? 'text-cyan-200' : 'text-slate-300'}>
+                          <span className="text-sm font-bold">A {row.angleA}&deg;</span>
+                        </span>
+                        <span className={isActive ? 'text-cyan-200' : 'text-slate-300'}>
+                          <span className="text-sm font-bold">B {row.angleB}&deg;</span>
+                        </span>
+                        <span className="text-[11px] text-slate-500">
+                          Step {row.angleStepInput}{modeLabel ? ` (${modeLabel})` : ''}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5 mt-1">
+                        <span className={`text-[9px] font-bold ${rowStatus === 'Ready' ? 'text-emerald-300' : rowStatus === 'Editing…' ? 'text-amber-300' : rowStatus === 'Hidden' ? 'text-slate-600' : 'text-red-300'}`}>
                           {rowStatus}
                         </span>
                       </div>
                       {row.validationError && (
-                        <div className="mt-1 pl-[18px] text-[9px] text-red-300">{row.validationError}</div>
+                        <div className="mt-1 text-[9px] text-red-300">{row.validationError}</div>
                       )}
                       {!parsedStep.valid && (
-                        <div className="mt-1 pl-[18px] text-[9px] text-red-300">{parsedStep.error}</div>
+                        <div className="mt-1 text-[9px] text-red-300">Angle Step error: {parsedStep.error}</div>
                       )}
                     </div>
                   );
@@ -3209,16 +3221,30 @@ export default function App() {
             onClick={e => e.stopPropagation()}
             className="w-full max-w-sm bg-[#151c24] border border-red-400/30 rounded-lg shadow-[0_20px_60px_rgba(0,0,0,0.55)] p-4"
           >
-            <h3 id="sequence-error-title" className="text-sm font-bold text-red-200 mb-2 flex items-center gap-1.5">
+            <h3 id="sequence-error-title" className="text-sm font-bold text-red-200 mb-3 flex items-center gap-1.5">
               <AlertTriangle className="w-4 h-4 shrink-0" /> {errorModal.title}
             </h3>
-            <p id="sequence-error-message" className="text-xs text-slate-300 whitespace-pre-line leading-relaxed mb-4">
-              {errorModal.message}
-            </p>
+            <div id="sequence-error-message" className="text-xs text-slate-300 leading-relaxed mb-4 space-y-3">
+              {errorModal.sections.map((section, i) => (
+                <div key={i}>
+                  <div className="text-[10px] uppercase tracking-wider font-bold text-slate-500 mb-0.5">{section.heading}</div>
+                  {section.list ? (
+                    <ul className="list-disc pl-4 space-y-0.5">
+                      {section.list.map((item, j) => <li key={j}>{item}</li>)}
+                    </ul>
+                  ) : (
+                    <div className="whitespace-pre-line">{section.text}</div>
+                  )}
+                </div>
+              ))}
+            </div>
             <div className="flex justify-end gap-2">
               <button
                 type="button"
-                onClick={() => { navigator.clipboard?.writeText(errorModal.message).catch(() => {}); }}
+                onClick={() => {
+                  const flat = errorModal.sections.map(s => `${s.heading}:\n${s.text || (s.list || []).map(item => `• ${item}`).join('\n')}`).join('\n\n');
+                  navigator.clipboard?.writeText(`${errorModal.title}\n\n${flat}`).catch(() => {});
+                }}
                 className="bg-[#0b1016] hover:bg-[#172230] border border-white/10 text-slate-300 px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-colors"
               >
                 Copy error details
