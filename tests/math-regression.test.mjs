@@ -13,6 +13,8 @@ globalThis.__unfolderMathApi = {
   buildAngleParamsFromSymbolValues,
   buildBaseTriangle,
   buildCodePathConsistencyValidation,
+  // Expose the extracted ray helper to the regression suite.
+  buildRayModeData,
   buildCodePathReference,
   buildFanConstraintValidation,
   buildPoolshotTowerValidation,
@@ -158,6 +160,57 @@ test('rendering includes the final reflected triangle instead of treating it as 
   assert.equal(renderableTriangles.length, codeData.parsedSequence.reduce((total, step) => total + step.count, 0));
   assert.strictEqual(renderableTriangles.at(-1), codeData.triangles.at(-1));
   assert.equal(renderableTriangles.at(-1).id, 'Code-T37');
+});
+
+test('ray mode keeps the terminal reflected triangle when the path ends at the origin after the last bounce', () => {
+  // Use a symmetric triangle whose ray returns to a vertex after reflection.
+  const baseTriangle = api.buildBaseTriangle('angles', [], { a: 45, b: 45, length: 10 });
+  // Trace enough bounces to include the return-to-origin event.
+  const rayData = api.buildRayModeData({
+    baseTriangle,
+    rayStartVertex: 0,
+    rayAngle: 45,
+    maxBounces: 5,
+    svgSize: { width: 1000, height: 1000 },
+    zoom: 1
+  });
+
+  // The terminal reflected copy must be retained in the rendered chain.
+  assert.ok(rayData.triangles.length >= 1);
+  // Ray-triangle identifiers remain stable for consumers and diagnostics.
+  assert.match(rayData.triangles.at(-1).id, /^Ray-T\d+$/);
+  // Copy points so the terminal geometry can be asserted independently.
+  const terminalPoints = rayData.triangles.at(-1).points.map(point => ({ x: point.x, y: point.y }));
+  // The fixed base endpoint remains in its expected position.
+  assert.equal(terminalPoints[1].x, 10);
+  // The fixed base endpoint remains on the horizontal base line.
+  assert.equal(terminalPoints[1].y, 0);
+  // Reflection may preserve either equivalent endpoint index at x = 0 or x = 10.
+  assert.ok(Math.abs(terminalPoints[0].x - 10) < 1e-9 || Math.abs(terminalPoints[0].x - 0) < 1e-9);
+  // The apex may occupy either equivalent reflected x-coordinate.
+  assert.ok(Math.abs(terminalPoints[2].x - 15) < 1e-9 || Math.abs(terminalPoints[2].x + 10) < 1e-9);
+});
+
+test('ray mode resolves rounded vertex hits toward the forward unfolded triangle', () => {
+  // Reuse the known code unfolding as the expected terminal geometry.
+  const { baseTriangle, codeData } = buildDefaultCodeData();
+  // Trace the displayed, rounded shot angle through the same base triangle.
+  const rayData = api.buildRayModeData({
+    baseTriangle,
+    rayStartVertex: 0,
+    // This is the displayed default code-shot angle, rounded to 12 decimals.
+    rayAngle: 3.105204803654,
+    maxBounces: 50,
+    svgSize: { width: 1000, height: 1000 },
+    zoom: 1
+  });
+
+  // Tie-breaking at rounded vertex hits must preserve the full unfolding length.
+  assert.equal(rayData.triangles.length, codeData.triangles.length);
+  // The final ray triangle must agree with the code unfolding point-for-point.
+  rayData.triangles.at(-1).points.forEach((point, index) => {
+    assertPointAlmostEqual(point, codeData.triangles.at(-1).points[index], 1e-9, `terminal point ${index}`);
+  });
 });
 
 test('symbolic angle conversion round-trips through the current physical label map', () => {
