@@ -47,7 +47,7 @@ the cross-file architecture map.
   length.
 - Implements two simulation paths:
   - ray mode: fixed ray through reflected triangles;
-  - code mode: integer-code parser plus heuristic reflection chain.
+  - code mode: integer-code parser plus deterministic fan reflection chain.
 - Uses the line from first physical `A` to final reflected physical `A` as the
   code-mode shot line; the validator evaluates that line at each vertex x
   coordinate.
@@ -153,11 +153,10 @@ the cross-file architecture map.
   two side vertices remain fixed.
 - Ray mode keeps the ray fixed and unfolds triangles, which avoids accumulating
   direction-reflection state.
-- Code mode currently uses a heuristic edge sequence rather than a proof-grade
-  legal-code validator.
+- Code mode reconstructs a deterministic fan edge sequence, but it is not a
+  proof-grade legal-code validator.
 - The colored shot vector is endpoint-defined: first physical `A` to final
-  physical `A`, currently corresponding to symbolic `z/A` in the default
-  mapping.
+  physical `A`, corresponding to symbolic `x/A`.
 - The current tower validator deliberately uses the direct y-at-line predicate
   requested for this iteration. Vertical shot lines are rejected for now because
   `lineY(x)` is undefined there.
