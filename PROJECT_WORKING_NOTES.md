@@ -439,115 +439,35 @@ Improvement over a naive attempt:
 ## Code Unfolder
 
 Code mode is the app's main finite unfolding workbench. It accepts a
-space-separated list of integers and interprets those integers as bounce-block
-counts attached to symbolic angle labels.
+space-separated list of positive integers and interprets them as the sizes of
+successive triangle fans.
 
-This is a heuristic spatialization of a code, not a full legal code-sequence
-validator.
+It deterministically reconstructs one finite fan tower from the code. It does
+not prove that every input code is a legal periodic billiard code.
 
 ### Parsing The Integer Code
 
 Input text is split on whitespace. Each token is parsed as an integer; invalid
 tokens are discarded.
 
-The symbolic angle label sequence starts as:
-
-```text
-first count  -> y
-second count -> x
-```
-
-For each later count, the app looks at the previous count:
-
-```text
-if previous count is even:
-    next angle label = label from two positions ago
-else:
-    next angle label = the third of {x, y, z}
-```
-
-Pseudocode:
-
-```text
-function parseCode(text):
-    nums = parse all whitespace-separated integers
-    if nums is empty:
-        return empty data
-
-    labels = []
-    if nums has at least 1 item:
-        labels[0] = "y"
-    if nums has at least 2 items:
-        labels[1] = "x"
-
-    for i from 2 to nums.length - 1:
-        previousNumber = nums[i - 1]
-        currentLabel = labels[i - 1]
-        previousLabel = labels[i - 2]
-
-        if previousNumber is even:
-            labels[i] = previousLabel
-        else:
-            labels[i] = the label in ["x", "y", "z"] not equal to
-                        currentLabel or previousLabel
-
-    return zip(nums, labels) as parsedSequence
-```
-
-This parity rule matches the angle-label evolution described in the larger
-billiards reference notes. The difference is that the full project validates and
-canonicalizes code sequences; this React app only parses and unfolds them.
+The first fan is `y`, centered at the right acute vertex. The ray starts in the
+wedge between `AB` and `BC`, so its first crossed side is `BC`, opposite the
+source angle `x`. After each fan, the next fan center is the other endpoint of
+the last reflected side. This produces the same parity evolution as a code
+sequence without guessing a label from run lengths or screen coordinates.
 
 ### Mapping Symbolic Angles To Physical Vertices
 
-The input code refers to symbolic angles `x`, `y`, and `z`. The displayed triangle
-has physical vertices `A`, `B`, and `C`. The app maps symbols to physical vertices
-heuristically:
-
-1. For each symbol, find the largest count attached to that symbol.
-2. Compute the actual internal angles at vertices `A`, `B`, and `C`.
-3. Sort physical angles from smallest to largest.
-4. Sort symbols by descending largest count, using alphabetical order to break
-   ties.
-5. Map the symbol with the largest count to the smallest physical angle, the next
-   to the next, and so on.
-
-Pseudocode:
+The symbolic frame is fixed by the physical starting triangle:
 
 ```text
-function mapSymbols(parsedSequence, triangle):
-    maxCount = { x: 0, y: 0, z: 0 }
-
-    for step in parsedSequence:
-        maxCount[step.angle] = max(maxCount[step.angle], step.count)
-
-    actualAngles = [
-        { idx: 0, rad: angle at A },
-        { idx: 1, rad: angle at B },
-        { idx: 2, rad: angle at C }
-    ]
-    sort actualAngles by rad ascending
-
-    symbols = ["x", "y", "z"]
-    sort symbols by maxCount descending, then name ascending
-
-    angleToIdx[symbols[0]] = actualAngles[0].idx
-    angleToIdx[symbols[1]] = actualAngles[1].idx
-    angleToIdx[symbols[2]] = actualAngles[2].idx
-
-    return angleToIdx and inverse idxToAngle
+x -> A (left/source acute vertex)
+y -> B (right acute vertex)
+z -> C (top obtuse vertex)
 ```
 
-Why this exists:
-
-- In the conjecture setting, small angles can generate many repeated reflections.
-- The heuristic tries to pair the most repeated symbolic angle with the smallest
-  actual triangle angle, creating a more visually coherent unfolding.
-
-Risk:
-
-- This is not a proof rule. A rigorous conjecture checker should explicitly sort
-  angle variables according to the theorem convention and preserve that mapping.
+This invariant preserves the meaning of a code while angles are edited and makes
+short codes independent of run-length ties.
 
 ### Choosing Edges For A Symbolic Angle
 
@@ -559,43 +479,11 @@ vertex 1 -> [0, 1]
 vertex 2 -> [1, 2]
 ```
 
-Each run of length `count` alternates between those two incident edges. If the
-last edge from the previous run is one of them, the app starts with the other
-edge. Otherwise it uses a centroid-direction heuristic.
-
-Centroid-direction heuristic:
-
-1. Reflect a test centroid across each candidate edge.
-2. Measure the dot product between each candidate centroid move and the current
-   unfolding direction.
-3. Choose the candidate with the larger dot product.
-
-Pseudocode:
-
-```text
-function chooseStartEdge(currentTri, edges, lastEdge, currentCentroid, currentDir):
-    if lastEdge is in edges:
-        return the edge in edges that is not lastEdge
-
-    c0 = testCentroid(currentTri, edges[0])
-    c1 = testCentroid(currentTri, edges[1])
-
-    dot0 = dot(c0 - currentCentroid, currentDir)
-    dot1 = dot(c1 - currentCentroid, currentDir)
-
-    if dot0 > dot1:
-        return edges[0]
-    else:
-        return edges[1]
-```
-
-Improvement over a naive attempt:
-
-- A naive implementation might always choose the first incident edge. That can
-  fold the triangle chain back on itself arbitrarily.
-- The last-edge rule prevents immediate backtracking across the same mirror edge.
-- The centroid-direction heuristic prefers the reflected copy that continues the
-  existing unfolded chain.
+Each run alternates between the two edges incident to its fan center. The edge
+before the first fan is `AB`; therefore the first emitted edge is `BC`. Every
+later emitted edge is simply the incident edge other than the preceding edge.
+When a fan finishes, the other endpoint of its final edge is the next fan center.
+There is no centroid, viewport, or coordinate-quadrant tie-breaker.
 
 ### Reflecting The Code Chain
 
@@ -614,43 +502,32 @@ For every parsed step:
 Pseudocode:
 
 ```text
-function codeUnfold(baseTriangle, parsedSequence, angleToIdx):
+function codeUnfold(baseTriangle, codeNumbers):
     currentTri = baseTriangle
-    currentCentroid = centroid(currentTri)
-    currentDir = currentCentroid - currentTri[0]
-    lastEdge = null
+    previousEdge = AB
+    fanVertex = B
     triangles = []
     sideSequence = []
     triCount = 0
 
-    for step in parsedSequence:
-        vertexIdx = angleToIdx[step.angle]
-        edges = incidentEdges(vertexIdx)
-        currentEdge = chooseStartEdge(
-            currentTri,
-            edges,
-            lastEdge,
-            currentCentroid,
-            currentDir
-        )
+    for count in codeNumbers:
+        edges = incidentEdges(fanVertex)
 
-        for j from 0 to step.count - 1:
+        for j from 0 to count - 1:
             if triCount >= MAX_TRIS:
                 break all loops
 
+            currentEdge = the edge in edges other than previousEdge
             sideSequence.append(EDGE_TO_SIDE[currentEdge])
 
             nextTri = reflectTriangleAcrossEdge(currentTri, currentEdge)
             triangles.append(nextTri)
 
-            nextCentroid = centroid(nextTri)
-            currentDir = nextCentroid - currentCentroid
-            currentCentroid = nextCentroid
-
             currentTri = nextTri
-            lastEdge = currentEdge
-            currentEdge = the other edge in edges
+            previousEdge = currentEdge
             triCount += 1
+
+        fanVertex = otherEndpoint(previousEdge, fanVertex)
 
     return triangles and sideSequence
 ```
@@ -664,8 +541,7 @@ The output shown in the UI:
   labels alone are display-oriented.
 - `triangles`: reflected triangle copies.
 - final shot-vector endpoint coordinate and global angle from the original
-  physical `A` to the final physical `A`. Under the default angle mapping this
-  endpoint is displayed as `z/A`.
+  physical `A` to the final physical `A`, displayed as `x/A`.
 
 ## Rendering And Interaction Algorithms
 
@@ -692,8 +568,8 @@ line = startShot -> finalShot
 
 That line is the main visual trajectory proxy in code mode. The validator uses
 the literal line through these two endpoints and evaluates it at each candidate
-vertex x coordinate. In the default conjecture-oriented setup, physical `A`
-carries symbolic label `z`, so the sidebar shows this vector as `z/A`.
+vertex x coordinate. Physical `A` carries symbolic label `x`, so the sidebar
+shows this vector as `x/A`.
 
 ### Finite Tower Line Validation
 
@@ -1057,11 +933,8 @@ The current app already improves on a naive attempt in several practical ways:
 
 The most important limitations are mathematical, not UI-related:
 
-- Code mode should be renamed or extended if it is meant to validate, because it
-  currently unfolds a heuristic edge sequence.
-- Symbol-to-angle mapping should be explicit for the conjecture. The heuristic
-  "largest run maps to smallest angle" can be useful visually, but it should not
-  decide theorem variables.
+- Code mode deterministically unfolds its finite fan chain, but it still does
+  not establish that an arbitrary code has a periodic realization.
 - The app should distinguish exploratory double geometry from proof-grade exact
   geometry in the UI and data model.
 - The conjecture conditions should become first-class inputs:
@@ -1101,7 +974,7 @@ The shortest accurate description is:
 ```text
 This project is a dark React/SVG workbench for visualizing finite unfolded
 triangle poolshots relevant to an invisible-point conjecture. It uses
-floating-point reflection geometry and a heuristic code-to-edge parser. It does
+floating-point reflection geometry and a deterministic code-to-fan parser. It does
 not yet prove visibility, invisibility, or the conjectured classification.
 ```
 

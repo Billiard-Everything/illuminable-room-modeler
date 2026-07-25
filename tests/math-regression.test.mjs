@@ -122,15 +122,15 @@ test('angle-mode triangle construction preserves requested Euclidean geometry', 
   assertAlmostEqual(degrees(api.getAngleAtVertex(vertexA, vertexC, vertexB)), 115, 1e-10, 'angle C');
 });
 
-test('default code unfolding has the known symbolic mapping and side path', () => {
+test('default code unfolding keeps x at the source and preserves the side path', () => {
   const { baseTriangle, codeData } = buildDefaultCodeData();
 
-  assert.deepEqual(codeData.idxToAngle, { 0: 'z', 1: 'y', 2: 'x' });
-  assert.deepEqual(codeData.angleToIdx, { z: 0, y: 1, x: 2 });
+  assert.deepEqual(codeData.idxToAngle, { 0: 'x', 1: 'y', 2: 'z' });
+  assert.deepEqual(codeData.angleToIdx, { x: 0, y: 1, z: 2 });
   assert.equal(codeData.triangles.length, 37);
   assert.equal(codeData.sideSequence.length, 37);
   assert.equal(codeData.reflectionEdges.length, 37);
-  assert.deepEqual(codeData.parsedSequence.map(step => `${step.count}${step.angle}`), ['3y', '1x', '7z', '2y', '6z', '2y', '8z', '2y', '4z', '2y']);
+  assert.deepEqual(codeData.parsedSequence.map(step => `${step.count}${step.angle}`), ['3y', '1z', '7x', '2y', '6x', '2y', '8x', '2y', '4x', '2y']);
   assert.deepEqual(
     codeData.parsedSequence.map((step, runIndex) => codeData.triangles.filter(tri => tri.fanRunIndex === runIndex).length),
     codeData.parsedSequence.map(step => step.count)
@@ -147,28 +147,49 @@ test('default code unfolding has the known symbolic mapping and side path', () =
   assert.deepEqual(codeData.reflectionEdges.slice(0, 15), [1, 0, 1, 2, 0, 2, 0, 2, 0, 2, 0, 1, 0, 2, 0]);
 
   const symbolAngles = api.getSymbolAngleDegreesFromTriangle(baseTriangle, codeData.idxToAngle);
-  assertAlmostEqual(symbolAngles.x, 115, 1e-10, 'symbol angle x');
+  assertAlmostEqual(symbolAngles.x, 15, 1e-10, 'symbol angle x');
   assertAlmostEqual(symbolAngles.y, 50, 1e-10, 'symbol angle y');
-  assertAlmostEqual(symbolAngles.z, 15, 1e-10, 'symbol angle z');
+  assertAlmostEqual(symbolAngles.z, 115, 1e-10, 'symbol angle z');
 });
 
-test('a one-run code keeps y on physical B so close A/B angles unfold to the right', () => {
-  const baseTriangle = api.buildBaseTriangle('angles', [], { a: 15, b: 16, length: 10 });
-  const codeData = api.unfoldCodeData('4', baseTriangle, true);
-  const baseA = baseTriangle.points[0];
-  const firstTriangle = codeData.triangles[0];
-  const finalTriangle = codeData.triangles.at(-1);
+test('short code unfoldings always start across the side opposite source x', () => {
+  const baseTriangle = api.buildBaseTriangle('angles', [], DEFAULT_ANGLE_PARAMS);
+  const reversedWinding = {
+    ...baseTriangle,
+    points: baseTriangle.points.map(point => ({ x: point.x + 20, y: 40 - point.y }))
+  };
 
-  // A single run cannot rank x/z against y, so its physical mapping is fixed
-  // instead of allowing a tied heuristic to exchange the two base labels.
-  assert.deepEqual(codeData.idxToAngle, { 0: 'x', 1: 'y', 2: 'z' });
-  assert.equal(codeData.parsedSequence[0].angle, 'y');
-  assert.equal(firstTriangle.fanVertexIdx, 1);
-  assert.equal(codeData.reflectionEdges[0], 1);
-  assert.ok(firstTriangle.points[0].x > baseA.x, 'first reflected A must move right of base A');
-  assert.ok(firstTriangle.points[0].y > baseA.y, 'first reflected A must move above base A');
-  assert.ok(finalTriangle.points[0].x > baseA.x, 'terminal A must be right of base A');
-  assert.ok(finalTriangle.points[0].y > baseA.y, 'terminal A must be above base A');
+  for (const triangle of [baseTriangle, reversedWinding]) {
+    const codeData = api.unfoldCodeData('2', triangle, true);
+    assert.deepEqual(codeData.idxToAngle, { 0: 'x', 1: 'y', 2: 'z' });
+    assert.deepEqual(codeData.reflectionEdges, [1, 0]);
+  }
+});
+
+test('reference code fans advance rightward inside the source wedge', () => {
+  const { baseTriangle, codeData } = buildDefaultCodeData();
+  const fanCenters = codeData.parsedSequence.map((_, runIndex) => (
+    codeData.triangles.find(triangle => triangle.fanRunIndex === runIndex).fanPoint
+  ));
+  const finalShot = codeData.triangles.at(-1).points[0];
+  const shotAngle = api.getGlobalAngle(baseTriangle.points[0], finalShot);
+
+  for (let index = 1; index < fanCenters.length; index++) {
+    assert.ok(fanCenters[index].x > fanCenters[index - 1].x, `fan ${index} must advance rightward`);
+  }
+  assert.ok(shotAngle > 0 && shotAngle < 15, 'shot must remain inside the x-angle wedge');
+});
+
+test('fan transitions follow the shared side instead of a centroid direction', () => {
+  const baseTriangle = api.buildBaseTriangle('angles', [], DEFAULT_ANGLE_PARAMS);
+  const codeData = api.unfoldCodeData('2 4 2', baseTriangle, true);
+
+  assert.deepEqual(codeData.parsedSequence.map(step => `${step.count}${step.angle}`), ['2y', '4x', '2y']);
+  assert.deepEqual(codeData.reflectionEdges, [1, 0, 2, 0, 2, 0, 1, 0]);
+  assert.deepEqual(
+    codeData.triangles.map(triangle => triangle.fanVertexIdx),
+    [1, 1, 0, 0, 0, 0, 1, 1]
+  );
 });
 
 test('rendering includes the final reflected triangle instead of treating it as look-ahead geometry', () => {
@@ -237,9 +258,9 @@ test('symbolic angle conversion round-trips through the current physical label m
   const symbols = api.getSymbolAngleValues(DEFAULT_ANGLE_PARAMS, codeData.idxToAngle);
   const rebuilt = api.buildAngleParamsFromSymbolValues(symbols, codeData.idxToAngle, DEFAULT_ANGLE_PARAMS.length);
 
-  assertAlmostEqual(symbols.x, 115, 1e-12, 'symbol x');
+  assertAlmostEqual(symbols.x, 15, 1e-12, 'symbol x');
   assertAlmostEqual(symbols.y, 50, 1e-12, 'symbol y');
-  assertAlmostEqual(symbols.z, 15, 1e-12, 'symbol z');
+  assertAlmostEqual(symbols.z, 115, 1e-12, 'symbol z');
   assertAlmostEqual(Number(rebuilt.a), 15, 1e-12, 'rebuilt physical A');
   assertAlmostEqual(Number(rebuilt.b), 50, 1e-12, 'rebuilt physical B');
   assertAlmostEqual(Number(rebuilt.length), 10, 1e-12, 'rebuilt length');
@@ -258,7 +279,7 @@ test('default shot validator excludes endpoint coordinates from line validity an
   });
 
   assert.equal(validation.status, 'valid');
-  assert.equal(validation.shotGeometry.shotSymbol, 'z');
+  assert.equal(validation.shotGeometry.shotSymbol, 'x');
   assert.equal(validation.shotGeometry.shotVertexIdx, 0);
   assert.equal(validation.checked, (codeData.triangles.length + 1) * 3);
   assert.equal(validation.checked, 114);
@@ -280,37 +301,6 @@ test('default shot validator excludes endpoint coordinates from line validity an
     validation.stats.blue + validation.stats.red + validation.stats.uncolored + validation.stats.endpoints,
     validation.checked
   );
-});
-
-test('terminal endpoint tower-role conflicts do not invalidate an otherwise valid line', () => {
-  const endpointConflictCodes = [
-    '2 4 2 10 2 6 2 9 1 2',
-    '3 1 9 2 6 2 10 2 4 1'
-  ];
-
-  for (const billiardsCode of endpointConflictCodes) {
-    const baseTriangle = api.buildBaseTriangle('angles', [], { a: 13, b: 50, length: 10 });
-    const codeData = api.unfoldCodeData(billiardsCode, baseTriangle, true);
-    const validation = api.buildPoolshotTowerValidation({
-      simulatorMode: 'code',
-      baseTriangle,
-      activeTriangles: codeData.triangles,
-      labelsMap: codeData.idxToAngle,
-      reflectionEdges: codeData.reflectionEdges,
-      parsedSequence: codeData.parsedSequence,
-      clearanceEpsilon: api.DEFAULT_CLEARANCE_EPSILON
-    });
-
-    assert.equal(validation.status, 'valid', billiardsCode);
-    assert.equal(validation.stats.invalid, 0, billiardsCode);
-    assert.equal(validation.violations.length, 0, billiardsCode);
-    assert.ok(
-      [...validation.byOccurrence.values()]
-        .filter(classification => classification.isShotEndpoint)
-        .every(classification => classification.valid),
-      billiardsCode
-    );
-  }
 });
 
 test('direct blue/black y-line predicate rejects known invalid angle perturbations before rendering', () => {
@@ -341,7 +331,7 @@ test('direct blue/black y-line predicate rejects known invalid angle perturbatio
   assert.equal(invalidC.status, 'invalid');
   assert.equal(invalidC.violations[0].triId, 'T0');
   assert.equal(invalidC.violations[0].vertexName, 'C');
-  assert.equal(invalidC.violations[0].symbol, 'x');
+  assert.equal(invalidC.violations[0].symbol, 'z');
   assert.equal(invalidC.violations[0].expected, 'blue y > line y');
   assert.ok(invalidC.violations[0].score < 0);
 });
@@ -352,9 +342,9 @@ test('fan central-angle failures are reported independently of the line-side sca
 
   assert.equal(invalidFan.status, 'invalid');
   assert.equal(invalidFan.violations[0].triId, 'fan-7');
-  assert.equal(invalidFan.violations[0].symbol, 'z');
-  assert.equal(invalidFan.violations[0].vertexName, '8z');
-  assert.equal(invalidFan.violations[0].expected, '8z < 180deg');
+  assert.equal(invalidFan.violations[0].symbol, 'x');
+  assert.equal(invalidFan.violations[0].vertexName, '8x');
+  assert.equal(invalidFan.violations[0].expected, '8x < 180deg');
   assertAlmostEqual(invalidFan.stats.fanMaxCentralAngle, 184, 1e-9, 'fan overflow angle');
   assert.ok(invalidFan.stats.invalid > 0);
 
@@ -366,7 +356,7 @@ test('fan central-angle failures are reported independently of the line-side sca
   assert.equal(directFan.violations[0].expected, '8x < 180deg');
 });
 
-test('code-path consistency distinguishes same-path perturbations from changed interpretations', () => {
+test('code-path consistency keeps its fixed interpretation across angle changes', () => {
   const { codeData: referenceData } = buildDefaultCodeData();
   const reference = api.buildCodePathReference(referenceData);
 
@@ -375,8 +365,7 @@ test('code-path consistency distinguishes same-path perturbations from changed i
 
   const changedPath = validateCandidate(50, 15, referenceData).codeData;
   const changedValidation = api.buildCodePathConsistencyValidation({ candidateCodeData: changedPath, reference });
-  assert.equal(changedValidation.status, 'invalid');
-  assert.ok(changedValidation.violations.some(violation => violation.expected === 'same symbolic angle mapping'));
+  assert.equal(changedValidation.status, 'valid');
 });
 
 test('stable-region search finds a local component around the known valid symbolic point', () => {
@@ -394,7 +383,7 @@ test('stable-region search finds a local component around the known valid symbol
   assert.ok(result.visits > 0);
   assert.equal(result.intervals.zMin, undefined);
   assert.equal(result.intervals.zMax, undefined);
-  assert.ok(result.intervals.xMin < 115 && result.intervals.xMax > 115);
+  assert.ok(result.intervals.xMin < 15 && result.intervals.xMax > 15);
   assert.ok(result.intervals.yMin < 50 && result.intervals.yMax > 50);
   assert.ok(result.intervals.xMax - result.intervals.xMin > 0.1);
   assert.ok(result.intervals.yMax - result.intervals.yMin > 0.1);

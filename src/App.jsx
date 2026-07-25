@@ -448,6 +448,23 @@ const getEdgesForAngle = (idx) => {
   return [1, 2];
 };
 
+/** Resolves the fixed code-mode frame: x is source A, y is B, and z is C. */
+const getCodeModeAngleMaps = () => ({
+  // Code paths start at physical A, so labels cannot depend on run counts.
+  angleToIdx: { x: 0, y: 1, z: 2 },
+  // Keep the inverse map with the same stable convention.
+  idxToAngle: { 0: 'x', 1: 'y', 2: 'z' }
+});
+
+/** Returns the other endpoint of an edge that is incident to a fan center. */
+const getOtherVertexOnEdge = (edge, vertexIdx) => {
+  const firstVertexIdx = edge;
+  const secondVertexIdx = (edge + 1) % 3;
+  if (firstVertexIdx === vertexIdx) return secondVertexIdx;
+  if (secondVertexIdx === vertexIdx) return firstVertexIdx;
+  return null;
+};
+
 /** Parses and unfolds the integer code against a supplied base triangle. */
 const unfoldCodeData = (billiardsCode, baseTriangle, enabled = true) => {
   // Return a fresh copy so consumers cannot mutate the shared empty constant.
@@ -456,81 +473,14 @@ const unfoldCodeData = (billiardsCode, baseTriangle, enabled = true) => {
   if (!enabled || !billiardsCode.trim()) return defaultData;
 
   // Parse all whitespace-separated integers and drop malformed tokens.
-  const nums = billiardsCode.trim().split(/\s+/).map(n => parseInt(n, 10)).filter(n => !isNaN(n));
+  const nums = billiardsCode.trim().split(/\s+/).map(n => parseInt(n, 10)).filter(n => Number.isInteger(n) && n > 0);
   // If every token was malformed, use the same empty default.
   if (nums.length === 0) return defaultData;
 
-  // `angles` stores the symbolic angle assigned to each integer run.
-  const angles = [];
-  // The symbolic angle alphabet is fixed by the conjecture notation.
-  const axes = ['x', 'y', 'z'];
-  // Historical code convention: the first block starts at y.
-  if (nums.length > 0) angles.push('y');
-  // Historical code convention: the second block starts at x.
-  if (nums.length > 1) angles.push('x');
-
-  // Derive each later symbolic label from parity and the two previous labels.
-  for (let i = 2; i < nums.length; i++) {
-    // Parity is read from the previous count.
-    const currNum = nums[i - 1];
-    // The previous symbolic angle.
-    const currAngle = angles[i - 1];
-    // The symbolic angle before that.
-    const lastAngle = angles[i - 2];
-
-    // Even previous count repeats the label from two positions back.
-    if (currNum % 2 === 0) angles.push(lastAngle);
-    // Odd previous count picks the only remaining symbolic label.
-    else angles.push(axes.find(a => a !== currAngle && a !== lastAngle));
-  }
-
-  // Pair each numeric run with its derived symbolic angle for display and unfolding.
-  const parsedSequence = nums.map((n, i) => ({ count: n, angle: angles[i] }));
-
-  // Track the largest run attached to each symbolic angle.
-  const maxBouncesCode = { x: 0, y: 0, z: 0 };
-  // A larger run is heuristically associated with a smaller geometric angle.
-  parsedSequence.forEach(step => {
-    // Store only the maximum run seen for this symbolic angle.
-    if (step.count > maxBouncesCode[step.angle]) {
-      // Update the symbol's maximum bounce count.
-      maxBouncesCode[step.angle] = step.count;
-    }
-  });
-
-  // Physical triangle vertices for angle measurement.
-  const pts = baseTriangle.points;
-  // Compute physical interior angles and retain their vertex indices.
-  const actualAngles = [
-    // Physical A is measured between CA and AB.
-    { idx: 0, rad: getAngleAtVertex(pts[2], pts[0], pts[1]) },
-    // Physical B is measured between AB and BC.
-    { idx: 1, rad: getAngleAtVertex(pts[0], pts[1], pts[2]) },
-    // Physical C is measured between BC and CA.
-    { idx: 2, rad: getAngleAtVertex(pts[1], pts[2], pts[0]) }
-  ].sort((a, b) => a.rad - b.rad);
-
-  // Sort symbols by their maximum run, descending, then alphabetically for stability.
-  const syms = ['x', 'y', 'z'].sort((a, b) => (maxBouncesCode[b] - maxBouncesCode[a]) || a.localeCompare(b));
-
-  // angleToIdx maps symbolic labels to physical vertex indices.
-  const angleToIdx = {};
-  // idxToAngle maps physical vertex indices back to symbolic labels.
-  const idxToAngle = {};
-  if (parsedSequence.length === 1) {
-    // One run gives evidence for y only. Ranking the unobserved x/z symbols
-    // can swap x and y for close A/B angles, moving the short unfolding to
-    // the left side. Keep the stable physical convention in this tie case.
-    angleToIdx.x = 0; idxToAngle[0] = 'x';
-    angleToIdx.y = 1; idxToAngle[1] = 'y';
-    angleToIdx.z = 2; idxToAngle[2] = 'z';
-  } else {
-    // Longer codes carry enough run information for the established
-    // largest-run-to-smallest-angle heuristic.
-    angleToIdx[syms[0]] = actualAngles[0].idx; idxToAngle[actualAngles[0].idx] = syms[0];
-    angleToIdx[syms[1]] = actualAngles[1].idx; idxToAngle[actualAngles[1].idx] = syms[1];
-    angleToIdx[syms[2]] = actualAngles[2].idx; idxToAngle[actualAngles[2].idx] = syms[2];
-  }
+  // Code labels are geometric identities; run lengths only control fan size.
+  const { angleToIdx, idxToAngle } = getCodeModeAngleMaps();
+  // Parsed runs are built while the deterministic fan chain is traversed.
+  const parsedSequence = [];
 
   // Reflected triangle copies emitted by the code unfolding.
   const triangles = [];
@@ -540,60 +490,31 @@ const unfoldCodeData = (billiardsCode, baseTriangle, enabled = true) => {
   const reflectionEdges = [];
   // Begin from a mutable copy of the base triangle's points.
   let currentTri = [...baseTriangle.points];
-  // The centroid gives a coarse notion of current unfolding direction.
-  let currentCentroid = getCentroid(currentTri);
-  // Start direction points from physical A to the initial centroid.
-  let currentDir = { x: currentCentroid.x - currentTri[0].x, y: currentCentroid.y - currentTri[0].y };
-  // Last reflected edge prevents immediately choosing the same side twice within a fan.
-  let lastEdge = null;
+  // Start in the wedge bounded by AB and BC, so the first reflection is BC.
+  let previousEdge = 0;
+  // The first fan is centered at y/B, the right acute angle.
+  let fanVertexIdx = angleToIdx.y;
   // Count emitted triangles separately from parsed run count.
   let triCount = 0;
 
-  // Expand every parsed block into repeated side reflections.
-  for (let stepIndex = 0; stepIndex < parsedSequence.length; stepIndex++) {
-    // Read this parsed count/symbol pair.
-    const step = parsedSequence[stepIndex];
-    // The fan vertex is the physical corner associated with this symbolic run.
-    const fanVertexIdx = angleToIdx[step.angle];
+  // Expand every code number as one fan in the unique side order it determines.
+  for (let stepIndex = 0; stepIndex < nums.length; stepIndex++) {
+    const count = nums[stepIndex];
+    const fanSymbol = idxToAngle[fanVertexIdx];
+    // Record the fan label derived from the preceding reflected side.
+    parsedSequence.push({ count, angle: fanSymbol });
     // The fan point is fixed throughout this count block, even as reflected triangles are emitted.
     const fanPoint = currentTri[fanVertexIdx] ? { ...currentTri[fanVertexIdx] } : null;
     // Convert this symbolic angle to its two physical adjacent edges.
     const edges = getEdgesForAngle(fanVertexIdx);
-    // currentEdge will be chosen either by alternation or forwardness.
-    let currentEdge;
 
-    // If we are already alternating within this fan, choose the other adjacent edge.
-    if (lastEdge !== null && edges.includes(lastEdge)) {
-      // Alternate away from the side just reflected.
-      currentEdge = edges[0] === lastEdge ? edges[1] : edges[0];
-    } else {
-      // Otherwise preview the centroid after the first candidate reflection.
-      const cA = testCentroid(currentTri, edges[0]);
-      // Preview the centroid after the second candidate reflection.
-      const cB = testCentroid(currentTri, edges[1]);
-      // The first fan fixes the drawing convention. When exactly one first
-      // candidate continues up and right from base A, prefer it; later fans
-      // keep the original forwardness rule and may legitimately cross axes.
-      const baseA = currentTri[0];
-      const firstQuadrantScore = (centroid) => (
-        centroid.x > baseA.x && centroid.y > baseA.y ? 1 : 0
-      );
-      const quadrantScoreA = lastEdge === null ? firstQuadrantScore(cA) : 0;
-      const quadrantScoreB = lastEdge === null ? firstQuadrantScore(cB) : 0;
-      // Dot product compares how much candidate A continues the current direction.
-      const dotA = (cA.x - currentCentroid.x) * currentDir.x + (cA.y - currentCentroid.y) * currentDir.y;
-      // Dot product compares how much candidate B continues the current direction.
-      const dotB = (cB.x - currentCentroid.x) * currentDir.x + (cB.y - currentCentroid.y) * currentDir.y;
-      // Use the quadrant preference only to break the first-fan ambiguity.
-      currentEdge = quadrantScoreA !== quadrantScoreB
-        ? (quadrantScoreA > quadrantScoreB ? edges[0] : edges[1])
-        : (dotA > dotB ? edges[0] : edges[1]);
-    }
-
-    // Emit exactly `count` reflected triangles for this symbolic run.
-    for (let i = 0; i < step.count; i++) {
+    // Emit exactly `count` reflected triangles, alternating about this fan center.
+    for (let i = 0; i < count; i++) {
       // Stop immediately once the hard cap is reached.
       if (triCount >= MAX_CODE_TRIANGLES) break;
+
+      // The next crossed side is the fan side other than the preceding side.
+      const currentEdge = edges[0] === previousEdge ? edges[1] : edges[0];
 
       // Log the conventional side number corresponding to the reflected edge.
       sideSequence.push(EDGE_TO_SIDE[currentEdge]);
@@ -630,30 +551,25 @@ const unfoldCodeData = (billiardsCode, baseTriangle, enabled = true) => {
         // The parsed block index groups triangles emitted by the same count.
         fanRunIndex: stepIndex,
         // The number in the code sequence that produced this fan.
-        fanRunCount: step.count,
+        fanRunCount: count,
         // Keep the source symbol for inspection and future UI details.
-        fanSymbol: step.angle,
+        fanSymbol,
         // Colors cycle so long unfoldings remain visually separable.
         color: COLORS[(triangles.length) % COLORS.length]
       });
 
-      // Update unfolding direction from old centroid to new centroid.
-      const nextCentroid = getCentroid(nextTri);
-      // Store the newest forward direction for the next non-alternating choice.
-      currentDir = { x: nextCentroid.x - currentCentroid.x, y: nextCentroid.y - currentCentroid.y };
-      // Move the centroid cursor forward.
-      currentCentroid = nextCentroid;
       // Continue from the newly reflected triangle.
       currentTri = nextTri;
-      // Remember the side just used.
-      lastEdge = currentEdge;
-      // Alternate to the other edge in the same fan for the next bounce.
-      currentEdge = currentEdge === edges[0] ? edges[1] : edges[0];
+      // The emitted side becomes the predecessor for the next fan edge.
+      previousEdge = currentEdge;
       // Increase the safety counter.
       triCount++;
     }
     // Stop outer loop too if the safety cap was hit.
     if (triCount >= MAX_CODE_TRIANGLES) break;
+    // Consecutive fans meet at the other endpoint of their shared final side.
+    fanVertexIdx = getOtherVertexOnEdge(previousEdge, fanVertexIdx);
+    if (fanVertexIdx === null) break;
   }
 
   // Return every code-derived structure consumed by the UI and candidate checks.
