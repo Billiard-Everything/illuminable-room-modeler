@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { X, RotateCcw, RefreshCw, Loader2, GripHorizontal, ZoomIn, ZoomOut, Maximize, Lock, Unlock, AlertTriangle, Eye, EyeOff, Minus, Square } from 'lucide-react';
+import { X, RotateCcw, RefreshCw, Loader2, GripHorizontal, ZoomIn, ZoomOut, Maximize, Maximize2, Minimize2, Lock, Unlock, AlertTriangle, Eye, EyeOff, Minus, Square } from 'lucide-react';
 import AnglePlotPanel from './AnglePlotPanel.jsx';
 import { generateAngleRegion } from './generateAngleRegion.js';
 import { generateVisibleAnglePoints } from './visibleAnglePointGenerator.js';
@@ -92,6 +92,38 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
   // every job/result/view setting below is untouched and reappears exactly
   // as it was on restore.
   const [isMinimized, setIsMinimized] = useState(false);
+  // Maximized fills the available viewport (minus a small margin) instead
+  // of the window's normal draggable/resizable box. `preMaximizeRef` holds
+  // the pos/size to restore exactly on un-maximize, so toggling it off
+  // never leaves the window at a different spot/size than before.
+  const [isMaximized, setIsMaximized] = useState(false);
+  const preMaximizeRef = useRef(null);
+  const MAXIMIZE_MARGIN = 12;
+  const toggleMaximize = () => {
+    if (isMaximized) {
+      if (preMaximizeRef.current) {
+        setPos(preMaximizeRef.current.pos);
+        setSize(preMaximizeRef.current.size);
+      }
+      setIsMaximized(false);
+    } else {
+      preMaximizeRef.current = { pos, size };
+      setIsMinimized(false);
+      setPos({ x: MAXIMIZE_MARGIN, y: MAXIMIZE_MARGIN });
+      setSize({ width: window.innerWidth - MAXIMIZE_MARGIN * 2, height: window.innerHeight - MAXIMIZE_MARGIN * 2 });
+      setIsMaximized(true);
+    }
+  };
+  // Keeps the maximized window filling the viewport if the browser window
+  // itself is resized, instead of leaving it sized to the old viewport.
+  useEffect(() => {
+    if (!isMaximized) return undefined;
+    const handleResize = () => {
+      setSize({ width: window.innerWidth - MAXIMIZE_MARGIN * 2, height: window.innerHeight - MAXIMIZE_MARGIN * 2 });
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [isMaximized]);
   // Closing this window unmounts it, which discards `results` (every
   // row's generated points) entirely — unlike minimizing, which keeps
   // everything and just hides the body. Confirmed once before actually
@@ -405,6 +437,9 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
   // --- Title-bar drag -------------------------------------------------
   const handleTitleMouseDown = (e) => {
     if (e.button !== 0) return;
+    // A maximized window fills the viewport by definition — dragging it
+    // would be meaningless until it's restored to its normal size first.
+    if (isMaximized) return;
     dragOffset.current = { x: e.clientX - pos.x, y: e.clientY - pos.y };
   };
   useEffect(() => {
@@ -438,6 +473,8 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
   // --- Corner resize ----------------------------------------------------
   const handleResizeMouseDown = (e) => {
     if (e.button !== 0) return;
+    // Same reasoning as the title-bar drag guard above.
+    if (isMaximized) return;
     e.stopPropagation();
     resizeStart.current = { startX: e.clientX, startY: e.clientY, startWidth: size.width, startHeight: size.height };
   };
@@ -483,7 +520,7 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
     >
       {/* Title bar: the "normal title bar" this pop-up is dragged by. */}
       <div
-        className="flex items-center justify-between gap-2 px-3 py-2 bg-[#0c1117] border-b border-white/10 cursor-move shrink-0 select-none"
+        className={`flex items-center justify-between gap-2 px-3 py-2 bg-[#0c1117] border-b border-white/10 shrink-0 select-none ${isMaximized ? '' : 'cursor-move'}`}
         onMouseDown={handleTitleMouseDown}
       >
         <div className="flex items-center gap-2 min-w-0">
@@ -499,6 +536,15 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
             className="text-slate-500 hover:text-cyan-200"
           >
             {isMinimized ? <Square className="w-3.5 h-3.5" /> : <Minus className="w-4 h-4" />}
+          </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); toggleMaximize(); }}
+            onMouseDown={(e) => e.stopPropagation()}
+            title={isMaximized ? 'Restore' : 'Maximize'}
+            className="text-slate-500 hover:text-cyan-200"
+          >
+            {isMaximized ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
           </button>
           <button type="button" onClick={requestClose} title="Close" className="text-slate-500 hover:text-red-300">
             <X className="w-4 h-4" />
@@ -649,16 +695,19 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
         />
       </div>
 
-      {/* Resize grip. */}
-      <div
-        className="absolute right-0 bottom-0 w-4 h-4 cursor-nwse-resize"
-        onMouseDown={handleResizeMouseDown}
-        title="Drag to resize"
-      >
-        <svg viewBox="0 0 16 16" className="w-full h-full text-slate-600">
-          <path d="M14 2 L2 14 M14 8 L8 14 M14 14 L14 14" stroke="currentColor" strokeWidth="1.5" fill="none" />
-        </svg>
-      </div>
+      {/* Resize grip — hidden while maximized, since the window can't be
+          resized until it's restored. */}
+      {!isMaximized && (
+        <div
+          className="absolute right-0 bottom-0 w-4 h-4 cursor-nwse-resize"
+          onMouseDown={handleResizeMouseDown}
+          title="Drag to resize"
+        >
+          <svg viewBox="0 0 16 16" className="w-full h-full text-slate-600">
+            <path d="M14 2 L2 14 M14 8 L8 14 M14 14 L14 14" stroke="currentColor" strokeWidth="1.5" fill="none" />
+          </svg>
+        </div>
+      )}
       </>
       )}
 
