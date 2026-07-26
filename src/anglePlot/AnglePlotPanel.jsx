@@ -327,6 +327,7 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ series, currentPoint
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    const renderStartedAt = import.meta.env.DEV ? performance.now() : 0;
     const dpr = window.devicePixelRatio || 1;
     canvas.width = size.width * dpr;
     canvas.height = size.height * dpr;
@@ -532,6 +533,16 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ series, currentPoint
         ctx.arc(x, y, 6 + idx * 2.5, 0, Math.PI * 2);
         ctx.stroke();
       });
+    }
+
+    // Dev-only: this canvas redraws every visible series in one batched
+    // pass (never one shape per point/graph — see the module comment on
+    // OCCUPANCY/DENSE/POINTS mode), so "Renderer update" below covers every
+    // currently-visible graph in a single paint, not one specific graph.
+    if (import.meta.env.DEV) {
+      const renderMs = performance.now() - renderStartedAt;
+      const totalPoints = series.reduce((sum, s) => sum + s.points.length, 0);
+      console.log(`[AnglePlotPanel] Renderer update: ${renderMs.toFixed(1)}ms | visible series: ${series.length} | total points drawn: ${totalPoints}`);
     }
   }, [series, currentPoint, size, zoom, pan, hoverMatches, pinnedMatches, toScreenX, toScreenY, toDataA, toDataB, palette, displayScale]);
 

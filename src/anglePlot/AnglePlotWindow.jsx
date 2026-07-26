@@ -6,6 +6,7 @@ import { generateVisibleAnglePoints } from './visibleAnglePointGenerator.js';
 import { parseAngleStep, displayScaleForStep, isExactModeStep, estimateAngleGridIterations, MAX_ANGLE_GRID_ITERATIONS } from './angleStep.js';
 import { RENDER_DEBOUNCE_MS } from './renderSamplingPolicy.js';
 import { truncateSequenceText } from '../sequences/sequenceGraphConfig.js';
+import { buildAngleRegionCacheKey, getCachedAngleRegion, setCachedAngleRegion } from './resultCache.js';
 
 // AnglePlotWindow: the pop-up "Valid Angle A-B Region" graph. This project
 // is a browser React app, not a desktop toolkit, so there is no native OS
@@ -82,7 +83,7 @@ const MAX_CONCURRENT_SEQUENCE_JOBS = 2;
 
 const emptyRowResult = () => ({ points: [], status: 'idle', mode: null, renderInfo: null, progress: null, error: null });
 
-export default function AnglePlotWindow({ sequences, activeSequenceId, angleParams, baseLength, buildValidateCandidateForSequence, refreshToken, onClose, onShowAll, onHideAll, onEditGraphs }) {
+export default function AnglePlotWindow({ sequences, activeSequenceId, angleParams, baseLength, buildValidateCandidateForSequence, refreshToken, onClose, onShowAll, onHideAll, onEditGraphs, onRowStatusChange, forceGenerateRequest }) {
   const [pos, setPos] = useState({ x: 96, y: 72 });
   const [size, setSize] = useState(DEFAULT_SIZE);
   const dragOffset = useRef(null);
@@ -151,11 +152,13 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
   const sequencesRef = useRef(sequences);
   const buildValidateCandidateForSequenceRef = useRef(buildValidateCandidateForSequence);
   const resultsRef = useRef(results);
+  const onRowStatusChangeRef = useRef(onRowStatusChange);
   useEffect(() => {
     sequencesRef.current = sequences;
     buildValidateCandidateForSequenceRef.current = buildValidateCandidateForSequence;
     resultsRef.current = results;
-  }, [sequences, buildValidateCandidateForSequence, results]);
+    onRowStatusChangeRef.current = onRowStatusChange;
+  }, [sequences, buildValidateCandidateForSequence, results, onRowStatusChange]);
 
   const debounceTimersRef = useRef({}); // id -> timeout handle
   const jobTaskRef = useRef({}); // id -> { promise, cancel }
@@ -165,9 +168,18 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
   const lastViewStateRef = useRef(null);
   const prevSequenceSnapshotRef = useRef({}); // id -> { sequenceText, angleStepInput, visible }
   const lastRefreshTokenRef = useRef(refreshToken);
+  const lastForceGenerateTokenRef = useRef(forceGenerateRequest?.token ?? null);
 
+  // Mirrors each row's plot lifecycle out to App.jsx so a graph's card can
+  // show "Not plotted / Calculating.../Plotted/Error" even while this
+  // window itself is minimized or the card is scrolled off-screen in the
+  // sidebar — this window is the only place `results` actually lives.
   const setRowResult = useCallback((id, patch) => {
-    setResults((prev) => ({ ...prev, [id]: { ...(prev[id] || emptyRowResult()), ...patch } }));
+    setResults((prev) => {
+      const next = { ...(prev[id] || emptyRowResult()), ...patch };
+      onRowStatusChangeRef.current?.(id, next);
+      return { ...prev, [id]: next };
+    });
   }, []);
 
   // Cancels a row's in-flight/queued job (if any) without touching its
@@ -223,6 +235,24 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
     setRowResult(seq.id, { status: 'running', error: null, progress: exactMode ? { mode: 'exact', tested: 0, total: 0, found: 0 } : { mode: 'adaptive', cellsChecked: 0, found: 0 } });
 
     if (exactMode) {
+      // In-memory session cache, keyed on every calculation-relevant input
+      // (see resultCache.js). Exact mode is the only thing cached here — it
+      // is the one deterministic, viewport-independent sweep (adaptive mode
+      // depends on the current zoom/pan too, which isn't a stable "input").
+      // A hit skips the entire multi-second sweep and applies instantly.
+      const cacheKey = buildAngleRegionCacheKey({
+        sequenceText: seq.sequenceText, angleA: seq.angleA, angleB: seq.angleB,
+        angleStepInput: seq.angleStepInput, baseLength,
+      });
+      const cached = getCachedAngleRegion(cacheKey);
+      if (cached) {
+        if (import.meta.env.DEV) {
+          console.log(`[${seq.label}] Cache hit — reused ${cached.points.length} points instantly (skipped ${cached.renderInfo.durationMs.toFixed(1)}ms recalculation).`);
+        }
+        setRowResult(seq.id, { points: cached.points, status: 'done', mode: 'exact', renderInfo: { ...cached.renderInfo, fromCache: true } });
+        finishSlot();
+        return;
+      }
       const estimatedIterations = estimateAngleGridIterations(parsed.scale, parsed.stepUnits, undefined);
       if (estimatedIterations > BigInt(MAX_ANGLE_GRID_ITERATIONS)) {
         setPendingLargeExactSweeps((list) => [...list.filter((p) => p.id !== seq.id), { id: seq.id, label: seq.label, ...parsed, estimatedIterations }]);
@@ -240,10 +270,13 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
       jobTaskRef.current[seq.id] = task;
       task.promise.then((resultPoints) => {
         if (jobRequestIdRef.current[seq.id] === requestId) {
-          setRowResult(seq.id, {
-            points: resultPoints, status: 'done', mode: 'exact',
-            renderInfo: { mode: 'exact', userStepDegrees: parsed.stepDegrees, gridStepDegrees: parsed.stepDegrees, displayScale: displayScaleForStep(parsed.scale), pointCount: resultPoints.length, durationMs: performance.now() - startedAt },
-          });
+          const calcMs = performance.now() - startedAt;
+          const renderInfo = { mode: 'exact', userStepDegrees: parsed.stepDegrees, gridStepDegrees: parsed.stepDegrees, displayScale: displayScaleForStep(parsed.scale), pointCount: resultPoints.length, durationMs: calcMs };
+          setCachedAngleRegion(cacheKey, { points: resultPoints, renderInfo });
+          if (import.meta.env.DEV) {
+            console.log(`[${seq.label}]\n  Calculation: ${calcMs.toFixed(1)}ms\n  Geometry preparation: 0.0ms (points are drawn directly, no separate geometry-build step)\n  Total: ${calcMs.toFixed(1)}ms\n  Point count: ${resultPoints.length}`);
+          }
+          setRowResult(seq.id, { points: resultPoints, status: 'done', mode: 'exact', renderInfo });
         }
         finishSlot();
       });
@@ -326,10 +359,15 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
     jobTaskRef.current[id] = task;
     task.promise.then((resultPoints) => {
       if (jobRequestIdRef.current[id] === requestId) {
-        setRowResult(id, {
-          points: resultPoints, status: 'done', mode: 'exact',
-          renderInfo: { mode: 'exact', userStepDegrees: pending.stepDegrees, gridStepDegrees: pending.stepDegrees, displayScale: displayScaleForStep(pending.scale), pointCount: resultPoints.length, durationMs: performance.now() - startedAt },
-        });
+        const calcMs = performance.now() - startedAt;
+        const renderInfo = { mode: 'exact', userStepDegrees: pending.stepDegrees, gridStepDegrees: pending.stepDegrees, displayScale: displayScaleForStep(pending.scale), pointCount: resultPoints.length, durationMs: calcMs };
+        setCachedAngleRegion(buildAngleRegionCacheKey({
+          sequenceText: seq.sequenceText, angleA: seq.angleA, angleB: seq.angleB, angleStepInput: seq.angleStepInput, baseLength,
+        }), { points: resultPoints, renderInfo });
+        if (import.meta.env.DEV) {
+          console.log(`[${seq.label}]\n  Calculation: ${calcMs.toFixed(1)}ms\n  Geometry preparation: 0.0ms (points are drawn directly, no separate geometry-build step)\n  Total: ${calcMs.toFixed(1)}ms\n  Point count: ${resultPoints.length}`);
+        }
+        setRowResult(id, { points: resultPoints, status: 'done', mode: 'exact', renderInfo });
       }
       runningIdsRef.current.delete(id);
       tryStartNextQueuedJob();
@@ -395,8 +433,18 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
         const justBecameVisible = !isNew && !prevEntry.visible;
         const hasCachedResult = !!resultsRef.current[seq.id] && resultsRef.current[seq.id].status === 'done';
 
-        if (isForcedRefresh || isNew || contentChanged || (justBecameVisible && !hasCachedResult)) {
-          scheduleRenderForSequence(seq, lastViewStateRef.current, { immediate: isForcedRefresh || isNew || contentChanged });
+        // `isNew` deliberately does NOT trigger a schedule on its own: every
+        // graph now has its own "Plot Valid Angle Region" button (see
+        // forceGenerateRequest below), so simply mounting this window (or a
+        // brand-new row appearing in `sequences`) must never auto-compute
+        // anything — otherwise clicking Plot on one card would also kick
+        // off every *other* visible-but-never-plotted card the first time
+        // the window opens, which is exactly the "recalculates graphs you
+        // didn't ask for" behavior this feature must avoid. A row only
+        // starts computing when its own button is pressed, its already-
+        // tracked content changes, or an explicit global refresh happens.
+        if (isForcedRefresh || contentChanged || (justBecameVisible && !hasCachedResult)) {
+          scheduleRenderForSequence(seq, lastViewStateRef.current, { immediate: isForcedRefresh || contentChanged });
         }
         // justBecameVisible with a valid cached result and no content change: reuse the cache, no job scheduled.
       }
@@ -405,6 +453,21 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
     return () => clearTimeout(timeoutId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sequences, refreshToken]);
+
+  // Per-graph "Plot Valid Angle Region" button (in each sequence card, not
+  // just this window's own toolbar): forces exactly that one row to
+  // (re)generate now, regardless of whether its inputs changed since last
+  // time — replotting the same graph should still work, and still checks
+  // the cache first via startSequenceJob's own cache lookup. Every other
+  // row's job/results are untouched.
+  useEffect(() => {
+    if (!forceGenerateRequest || forceGenerateRequest.token === lastForceGenerateTokenRef.current) return;
+    lastForceGenerateTokenRef.current = forceGenerateRequest.token;
+    const seq = sequences.find((s) => s.id === forceGenerateRequest.id);
+    if (!seq) return;
+    scheduleRenderForSequence(seq, lastViewStateRef.current, { immediate: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [forceGenerateRequest, sequences]);
 
   // Cancel every outstanding job on unmount so a closed window never calls setState after it stops existing.
   useEffect(() => () => {

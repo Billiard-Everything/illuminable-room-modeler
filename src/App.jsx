@@ -1,7 +1,7 @@
 // React supplies state, refs, effects, and memoization for this client-only tool.
 import { useState, useRef, useEffect, useMemo } from 'react';
 // Lucide supplies recognizable control/status icons without custom SVG code.
-import { Maximize, Zap, Settings2, List, Code2, Compass, ChevronRight, Activity, CheckCircle2, XCircle, ShieldCheck, Eye, EyeOff, Search, AlertTriangle, Sun, Moon, ZoomIn, ZoomOut, Lock, Unlock, ScatterChart, Plus, Copy, Trash2 } from 'lucide-react';
+import { Maximize, Zap, Settings2, List, Code2, Compass, ChevronRight, ChevronLeft, Activity, CheckCircle2, XCircle, ShieldCheck, Eye, EyeOff, Search, AlertTriangle, Sun, Moon, ZoomIn, ZoomOut, Lock, Unlock, ScatterChart, Plus, Loader2, Trash2 } from 'lucide-react';
 // The angle-region plot pop-up lives in its own module (see src/anglePlot) so
 // it can be unit-tested without React and does not bloat this file further.
 import AnglePlotWindow from './anglePlot/AnglePlotWindow.jsx';
@@ -1448,6 +1448,9 @@ export default function App() {
   const isDarkTheme = theme === 'dark';
   // SVG presentation attributes need direct palette values.
   const themePalette = THEME_PALETTES[theme];
+  // Hides the whole left sidebar to give the canvas full width. A floating
+  // button takes its place when hidden, so it's always reachable again.
+  const [isSidebarVisible, setIsSidebarVisible] = useState(true);
   // Two modes share the same viewer: geometric ray tracing and code unfolding.
   const [simulatorMode, setSimulatorMode] = useState('code'); 
   // The base triangle can be entered as coordinates or as two angles plus length.
@@ -1461,7 +1464,11 @@ export default function App() {
   // visible "A/B Spinner" control was removed as confusing); fixed at its
   // default rather than left as dead state.
   const angleIncrementInput = String(DEFAULT_ANGLE_INCREMENT);
-  // This separate increment controls the native stepper attached to the Angle Step field itself.
+  // Native spinner-arrow increment shared by every card's Angle Step field
+  // (and Graph Setup's). Editable again in both places — same single
+  // shared value/behavior as the old top-level "Step Increment" field, just
+  // relocated next to each card's own Angle Step instead of living at the
+  // top of the sidebar.
   const [angleStepControlIncrementInput, setAngleStepControlIncrementInput] = useState(String(DEFAULT_ANGLE_STEP_CONTROL_INCREMENT));
   // Coordinate defaults create a right-ish triangle for immediate manual testing.
   const [baseCoordsInput, setBaseCoordsInput] = useState([
@@ -1538,6 +1545,15 @@ export default function App() {
   // Bumped on every "Plot Valid Angle Region" click so an already-open window
   // regenerates and comes to the front instead of a duplicate window opening.
   const [anglePlotRequestId, setAnglePlotRequestId] = useState(0);
+  // Per-row plot lifecycle, mirrored out of AnglePlotWindow (the only place
+  // `results` actually lives) so each graph's own card can show its status
+  // ("Not plotted"/"Calculating…"/"Plotted"/"Error") even while that window
+  // is closed, minimized, or the card is scrolled elsewhere in the sidebar.
+  const [plotStatusById, setPlotStatusById] = useState({});
+  // A graph card's own "Plot Valid Angle Region" button sets this to force
+  // *only* that row to (re)generate now, independent of whichever row is
+  // active and without touching any other row's already-plotted geometry.
+  const [forceGenerateRequest, setForceGenerateRequest] = useState(null);
 
   // --- VIEWPORT & INTERACTION STATE ---
   // Ref to the canvas container lets us measure available SVG pixels.
@@ -1566,24 +1582,28 @@ export default function App() {
     window.localStorage.setItem('unfolder-theme', theme);
   }, [theme]);
 
-  // Mount/Resize observer
+  // Mount/Resize observer. A plain `window` "resize" listener only fires
+  // when the browser viewport itself changes size — it never fires when
+  // this container's own width changes for a layout reason instead (e.g.
+  // toggling the sidebar: the canvas panel widens via flexbox, but the
+  // window doesn't resize), which left the SVG's transform centered on a
+  // stale width and the newly-freed space simply blank. A ResizeObserver
+  // on the container itself fires for either cause, matching the same
+  // pattern AnglePlotPanel.jsx already uses for its own canvas.
   useEffect(() => {
-    // Measure lazily so the SVG fills whatever flex space the layout gives it.
+    const el = containerRef.current;
+    if (!el) return undefined;
     const measure = () => {
-      // The ref is null until React mounts the canvas container.
-      if (containerRef.current) {
-        // Browser layout is authoritative for the final canvas dimensions.
-        const { width, height } = containerRef.current.getBoundingClientRect();
-        // Store dimensions in React state so grid and transforms recompute.
-        setSvgSize({ width, height });
-      }
+      // Browser layout is authoritative for the final canvas dimensions.
+      const { width, height } = el.getBoundingClientRect();
+      // Store dimensions in React state so grid and transforms recompute.
+      setSvgSize({ width, height });
     };
-    // Measure immediately after mount.
+    // Measure immediately, then on every subsequent size change.
     measure();
-    // Re-measure when the browser viewport changes.
-    window.addEventListener('resize', measure);
-    // Remove the listener on unmount to avoid stale callbacks.
-    return () => window.removeEventListener('resize', measure);
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
   }, []);
 
   // Hardware-accelerated zoom block 
@@ -1641,12 +1661,6 @@ export default function App() {
     // Resolve the independently configurable native increment for the Angle Step control.
     return resolvePositiveInputStep(angleStepControlIncrementInput, DEFAULT_ANGLE_STEP_CONTROL_INCREMENT);
   }, [angleStepControlIncrementInput]);
-
-  // Validity of the active row's own Angle Step, shown next to the single
-  // main-control editor for it (the per-row list only displays this value).
-  const activeRowParsedStep = useMemo(() => parseAngleStep(activeSequence?.angleStepInput ?? ''), [activeSequence?.angleStepInput]);
-  const activeRowStepValid = activeRowParsedStep.valid;
-  const activeRowStepError = activeRowParsedStep.error;
 
   const formatFixed = (value) => {
     // Non-finite geometry values should be visible instead of throwing in toFixed().
@@ -1823,26 +1837,39 @@ export default function App() {
   // active row, not to redefine what "valid" means for a plotted region,
   // so every row's graph uses the same Constrained-style validity
   // definition regardless of which mode the active row happens to be in.
-  const buildValidateCandidateForSequence = (sequenceText, referenceAngleParams = angleParams) => (candidateParams) => {
-    if (!sequenceText || !sequenceText.trim()) return { allowed: false, reason: 'sequence is empty' };
-    if (!hasCompleteAngleParams(candidateParams)) return { allowed: false, reason: 'angle input is incomplete' };
-    if (!hasValidAngleTriangle(candidateParams)) return { allowed: false, reason: 'triangle angles are invalid' };
-
-    const candidateTriangle = buildBaseTriangle('angles', baseCoordsInput, candidateParams);
-    const candidateCodeData = unfoldCodeData(sequenceText, candidateTriangle, true);
+  // The reference triangle/codeData/path (this row's own committed
+  // unfolding) is the same for every candidate a given sweep tests — it
+  // only depends on (sequenceText, referenceAngleParams), never on the
+  // candidate (A, B) being checked. Building it here, once per sweep,
+  // instead of inside the returned per-candidate closure removes a
+  // redundant unfoldCodeData + buildCodePathReference call from every
+  // single candidate. Measured on a real 202k-candidate sweep (step=0.1,
+  // 10-run sequence): this alone saved ~3s of an ~18-21s sweep, with
+  // identical points found — a pure duplicate-work removal, not an
+  // approximation.
+  const buildValidateCandidateForSequence = (sequenceText, referenceAngleParams = angleParams) => {
+    if (!sequenceText || !sequenceText.trim()) return () => ({ allowed: false, reason: 'sequence is empty' });
     // The reference path is this row's own current committed unfolding
     // (same sequence text, against that row's own committed angles), not
     // necessarily the active row's — each row is validated against itself.
     const referenceTriangle = buildBaseTriangle('angles', baseCoordsInput, referenceAngleParams);
     const committedCodeData = unfoldCodeData(sequenceText, referenceTriangle, true);
-    const pathConsistency = buildCodePathConsistencyValidation({ candidateCodeData, reference: buildCodePathReference(committedCodeData) });
-    const candidateSelfValidation = buildPoolshotTowerValidation({ simulatorMode: 'code', baseTriangle: candidateTriangle, activeTriangles: candidateCodeData.triangles, labelsMap: candidateCodeData.idxToAngle, reflectionEdges: candidateCodeData.reflectionEdges, parsedSequence: candidateCodeData.parsedSequence, clearanceEpsilon, extraViolations: pathConsistency.violations });
-    if (candidateSelfValidation.status === 'invalid') {
-      const firstViolation = candidateSelfValidation.violations[0];
-      const reason = firstViolation ? `${firstViolation.triId} ${firstViolation.vertexName || firstViolation.symbol} expected ${firstViolation.expected}` : 'candidate ray failed blue/black line test';
-      return { allowed: false, reason };
-    }
-    return { allowed: true };
+    const reference = buildCodePathReference(committedCodeData);
+    return (candidateParams) => {
+      if (!hasCompleteAngleParams(candidateParams)) return { allowed: false, reason: 'angle input is incomplete' };
+      if (!hasValidAngleTriangle(candidateParams)) return { allowed: false, reason: 'triangle angles are invalid' };
+
+      const candidateTriangle = buildBaseTriangle('angles', baseCoordsInput, candidateParams);
+      const candidateCodeData = unfoldCodeData(sequenceText, candidateTriangle, true);
+      const pathConsistency = buildCodePathConsistencyValidation({ candidateCodeData, reference });
+      const candidateSelfValidation = buildPoolshotTowerValidation({ simulatorMode: 'code', baseTriangle: candidateTriangle, activeTriangles: candidateCodeData.triangles, labelsMap: candidateCodeData.idxToAngle, reflectionEdges: candidateCodeData.reflectionEdges, parsedSequence: candidateCodeData.parsedSequence, clearanceEpsilon, extraViolations: pathConsistency.violations });
+      if (candidateSelfValidation.status === 'invalid') {
+        const firstViolation = candidateSelfValidation.violations[0];
+        const reason = firstViolation ? `${firstViolation.triId} ${firstViolation.vertexName || firstViolation.symbol} expected ${firstViolation.expected}` : 'candidate ray failed blue/black line test';
+        return { allowed: false, reason };
+      }
+      return { allowed: true };
+    };
   };
 
   // Builds the detailed, plain-English explanation shown inline when a live
@@ -1908,6 +1935,16 @@ export default function App() {
     setAnglePlotRequestId(id => id + 1);
   };
 
+  // A graph card's own "Plot Valid Angle Region" button: opens the shared
+  // window if needed, makes this row visible (so its new result is actually
+  // seen on the shared canvas), and forces *only* this row to (re)generate —
+  // every other row's already-plotted geometry is untouched.
+  const handlePlotSequenceNow = (id) => {
+    setIsAnglePlotOpen(true);
+    setSequences(rows => rows.map(row => row.id === id ? { ...row, visible: true } : row));
+    setForceGenerateRequest({ id, token: Date.now() });
+  };
+
   // The Graph Setup dialog can configure a row before it has a valid code or
   // complete triangle, states that the live Base Geometry guard correctly
   // rejects. A completed active graph is instead delegated straight back to
@@ -1952,37 +1989,16 @@ export default function App() {
     setActiveSequenceId(newRow.id);
   };
 
-  // Duplicates a row's full configuration (text, step, visibility) as a new
-  // row with its own id/label/color, inserted immediately after the source
-  // row, and makes the copy active.
-  //
-  // Reads/writes `sequences` directly (a plain value, not a setSequences(rows
-  // => ...) functional updater) and computes the new row's number/id up
-  // front instead of inside the updater. React StrictMode intentionally
-  // invokes functional updaters twice in development to catch exactly this
-  // class of bug: mutating nextSequenceNumberRef.current (or calling other
-  // setState functions) *inside* an updater would run that side effect
-  // twice per click, silently skipping a sequence number and briefly
-  // pointing setActiveSequenceId at a row from a discarded first pass.
-  const handleDuplicateSequence = (id) => {
-    const sourceIndex = sequences.findIndex(row => row.id === id);
-    if (sourceIndex === -1) return;
-    const source = sequences[sourceIndex];
-    const number = nextSequenceNumberRef.current++;
-    const copy = { ...createSequenceRow({ number, sequenceText: source.sequenceText, angleStepInput: source.angleStepInput, angleA: source.angleA, angleB: source.angleB }), visible: source.visible };
-    const next = [...sequences];
-    next.splice(sourceIndex + 1, 0, copy);
-    setSequences(relabelSequenceRows(next));
-    setActiveSequenceId(copy.id);
-  };
-
   // Deletes a row. At least one row always exists: deleting the last
   // remaining row replaces it with a fresh blank one instead of leaving an
   // empty list. Deleting the active row hands "active" to a neighbor
   // (prefer the next row, fall back to the previous one) so the main
-  // unfolding view always has something to show. See handleDuplicateSequence
-  // above for why this reads `sequences` directly instead of using a
-  // setSequences functional updater.
+  // unfolding view always has something to show. Reads `sequences` directly
+  // (a plain value, not a setSequences(rows => ...) functional updater)
+  // rather than inside the updater — React StrictMode intentionally invokes
+  // functional updaters twice in development to catch exactly this class of
+  // bug: mutating a ref or calling other setState functions *inside* an
+  // updater would run that side effect twice per click.
   const handleRemoveSequence = (id) => {
     const index = sequences.findIndex(row => row.id === id);
     if (index === -1) return;
@@ -2192,11 +2208,26 @@ export default function App() {
 
 
   return (
-    <div data-theme={theme} className={`app-theme app-theme-${theme} flex h-screen w-full min-w-0 bg-[#080b0f] text-slate-200 font-sans overflow-hidden`}>
-      
+    <div data-theme={theme} className={`app-theme app-theme-${theme} relative flex h-screen w-full min-w-0 bg-[#080b0f] text-slate-200 font-sans overflow-hidden`}>
+
+      {/* Floating "show sidebar" button — only rendered while the sidebar
+          itself is hidden, so there's always exactly one way to reach it. */}
+      {!isSidebarVisible && (
+        <button
+          type="button"
+          onClick={() => setIsSidebarVisible(true)}
+          title="Show sidebar"
+          aria-label="Show sidebar"
+          className="absolute top-3 left-3 z-20 flex items-center gap-1 bg-[#10151c] border border-white/10 text-slate-300 hover:text-cyan-200 hover:border-cyan-300/30 px-2 py-2 rounded-md shadow-[0_8px_24px_rgba(0,0,0,0.4)] transition-colors"
+        >
+          <ChevronRight className="w-4 h-4" />
+        </button>
+      )}
+
       {/* LEFT PANEL - CONTROLS & INSPECTOR */}
+      {isSidebarVisible && (
       <div className="w-[340px] 2xl:w-[360px] border-r border-white/10 flex flex-col bg-[#10151c] shadow-[12px_0_36px_rgba(0,0,0,0.32)] z-10 overflow-hidden shrink-0">
-        
+
         {/* App Header & Tabs */}
         <div className="pt-8 pb-0 px-5 border-b border-white/10 bg-[#0c1117] shrink-0">
           <div className="flex items-start justify-between gap-3 mb-5">
@@ -2207,6 +2238,15 @@ export default function App() {
               <p className="text-[11px] font-medium text-slate-500 uppercase tracking-widest">Invisible Point Workbench</p>
             </div>
             <div className="flex shrink-0 gap-2">
+              <button
+                type="button"
+                onClick={() => setIsSidebarVisible(false)}
+                title="Hide sidebar"
+                aria-label="Hide sidebar"
+                className="flex items-center justify-center bg-[#0b1016] hover:bg-[#172230] border border-white/10 text-slate-400 hover:text-cyan-200 rounded-md px-2 transition-colors"
+              >
+                <ChevronLeft className="w-3.5 h-3.5" />
+              </button>
               <button
                 type="button"
                 onClick={() => setTheme(current => current === 'dark' ? 'light' : 'dark')}
@@ -2220,9 +2260,9 @@ export default function App() {
               </button>
             </div>
           </div>
-          
+
           <div className="grid grid-cols-2 gap-1 rounded-lg border border-white/10 bg-[#070b10] p-1">
-            <button 
+            <button
               onClick={() => setSimulatorMode('ray')}
               title="Shoot one ray from a selected vertex."
               className={`rounded-md px-3 py-2 text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${simulatorMode === 'ray' ? 'bg-amber-300/15 text-amber-100 shadow-sm' : 'text-slate-500 hover:text-slate-200 hover:bg-white/5'}`}
@@ -2288,88 +2328,34 @@ export default function App() {
               </div>
             ) : (
               <div className="space-y-2.5">
-                <div className="flex items-center gap-2">
-                  <span className="text-[11px] font-bold text-slate-500 w-16 text-right mr-1">Angle A</span>
-                  <div className="relative w-full">
-                    <input type="number" step={angleInputStep} value={angleParams.a} onChange={e => handleAngleParamChange('a', e.target.value)} placeholder="Enter Angle A" className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2.5 py-1.5 text-sm focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 placeholder:text-slate-600 placeholder:text-xs transition-all pr-6" />
-                    <span className="absolute right-2 top-1.5 text-slate-500 font-mono text-xs">&deg;</span>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-[11px] font-bold text-slate-500 w-16 text-right mr-1">Angle B</span>
-                  <div className="relative w-full">
-                    <input type="number" step={angleInputStep} value={angleParams.b} onChange={e => handleAngleParamChange('b', e.target.value)} placeholder="Enter Angle B" className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2.5 py-1.5 text-sm focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 placeholder:text-slate-600 placeholder:text-xs transition-all pr-6" />
-                    <span className="absolute right-2 top-1.5 text-slate-500 font-mono text-xs">&deg;</span>
-                  </div>
-                </div>
-                {(activeSequence?.angleA === '' || activeSequence?.angleB === '') && (
-                  <div className="text-[10px] text-amber-800 -mt-1 pl-16">
-                    Enter Angle A and Angle B for this sequence to unfold it.
-                  </div>
-                )}
-                <div className="flex items-center gap-2">
-                  <span className="text-[11px] font-bold text-slate-500 w-16 text-right mr-1">Angle Step</span>
-                  <input
-                    type="number"
-                    min="0"
-                    step={angleStepControlIncrement}
-                    value={activeSequence?.angleStepInput ?? ''}
-                    onChange={e => handleSequenceAngleStepChange(activeSequenceId, e.target.value)}
-                    title={`Grid step for ${activeSequence?.label ?? 'the active sequence'}'s own "Valid Angle A-B Region" graph. This is the single editing location for this value — the row list below only displays it.`}
-                    className={`w-full bg-[#0b1016] border rounded-md px-2.5 py-1.5 text-sm focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 transition-all ${activeRowStepValid ? 'border-white/10' : 'border-red-400/50'}`}
-                  />
-                </div>
-                {!activeRowStepValid && (
-                  <div className="text-[10px] text-red-300 mt-1 pl-16">{activeRowStepError}</div>
-                )}
-                <div className="flex items-center gap-2">
-                  <span className="text-[11px] font-bold text-slate-500 w-16 text-right mr-1">Step Increment</span>
-                  <input
-                    type="number"
-                    min="0"
-                    step="any"
-                    value={angleStepControlIncrementInput}
-                    onChange={e => setAngleStepControlIncrementInput(e.target.value)}
-                    title="Native spinner/arrow increment used by the Angle Step field above."
-                    className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2.5 py-1.5 text-sm focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 transition-all"
-                  />
-                </div>
+                {/* Angle A, Angle B, Angle Step, and Plot Valid Angle Region
+                    now live on each graph's own card (Sequence Parser list
+                    below) so every graph keeps fully independent values —
+                    Base Length is the only geometry value every graph
+                    still shares. */}
                 <div className="flex items-center gap-2">
                   <span className="text-[11px] font-bold text-slate-500 w-16 text-right mr-1">Base Length</span>
-                  <input type="number" step="0.1" value={angleParams.length} onChange={e => handleAngleParamChange('length', e.target.value)} className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2.5 py-1.5 text-sm focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 transition-all" />
+                  <input
+                    type="number"
+                    step="any"
+                    value={angleParams.length}
+                    onChange={e => handleAngleParamChange('length', e.target.value)}
+                    placeholder="Enter Base Length"
+                    className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2.5 py-1.5 text-sm focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 placeholder:text-slate-600 transition-all"
+                  />
                 </div>
-                {/* The old "A/B Spinner" field (angleIncrementInput) is no
-                    longer shown — it was a confusing extra control. Its
-                    value is kept internally at its default and still
-                    supplies the Angle A/B number-stepper increment and new
-                    row's default Angle Step; only the visible editor for it
-                    was removed. */}
-                {lockedShotNotice && (
+                {lockedShotNotice && lockedShotNotice.isLengthField && (
                   <div className="text-[10px] text-amber-100 mt-1 font-medium bg-amber-500/10 rounded py-1.5 px-2 border border-amber-300/20 space-y-1">
-                    <div className="font-bold">
-                      {lockedShotNotice.isLengthField ? 'Base Length' : lockedShotNotice.field === 'a' ? 'Angle A' : 'Angle B'} of {lockedShotNotice.value} was not applied.
-                    </div>
-                    {!lockedShotNotice.isLengthField && (
-                      <div>Current values: Angle A {lockedShotNotice.currentA}&deg;, Angle B {lockedShotNotice.currentB}&deg;</div>
-                    )}
+                    <div className="font-bold">Base Length of {lockedShotNotice.value} was not applied.</div>
                     <ul className="list-disc pl-4 space-y-0.5">
                       {lockedShotNotice.requiredConstraints.map((c, i) => <li key={i}>{c}</li>)}
                     </ul>
                     <div><span className="font-bold">How to fix it:</span> {lockedShotNotice.howToFix}</div>
                   </div>
                 )}
-                {(Number(angleParams.a) + Number(angleParams.b) >= 180) && (
-                  <div className="text-[10px] text-red-200 mt-1 pl-16 text-center font-medium bg-red-500/10 rounded py-1 border border-red-400/20">Angles must sum &lt; 180&deg;</div>
-                )}
-                <button
-                  type="button"
-                  onClick={handleOpenAnglePlot}
-                  title="Generate and open the valid A/B angle-pair scatter plot."
-                  className="w-full flex items-center justify-center gap-1.5 bg-[#101820]/95 hover:bg-[#172230] text-slate-200 hover:text-cyan-200 px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-colors"
-                >
-                  <ScatterChart className="w-3.5 h-3.5" />
-                  Plot Valid Angle Region
-                </button>
+                <p className="text-[10px] text-slate-500 leading-relaxed">
+                  Angle A, Angle B, Angle Step, and Plot Valid Angle Region are set per graph in the Sequence Parser list below.
+                </p>
               </div>
             )}
 
@@ -2432,12 +2418,12 @@ export default function App() {
             <div className="p-4 bg-[#151c24] m-3 rounded-lg shadow-[0_8px_28px_rgba(0,0,0,0.28)] border border-white/10">
               <div className="flex items-center justify-between mb-2">
                 <h2 className="text-xs uppercase tracking-wider font-bold text-cyan-200 flex items-center gap-1.5">
-                  <Code2 className="w-3.5 h-3.5" /> Sequence Parser
+                  <Code2 className="w-3.5 h-3.5" /> Graphs
                 </h2>
-                <span className="text-[10px] font-mono text-slate-500">{sequences.length} sequence{sequences.length === 1 ? '' : 's'}</span>
+                <span className="text-[10px] font-mono text-slate-500">{sequences.length} graph{sequences.length === 1 ? '' : 's'}</span>
               </div>
               <p className="text-[10px] text-slate-500 mb-2 leading-relaxed">
-                Each row is one independent bounce-code sequence with its own Angle Step and graph color. Click a row to make it the active unfolding shown on the canvas.
+                Each card is one independent graph with its own code, Angle A/B, Angle Step, and color, plotted together on the shared Valid Angle A-B Region graph. Click a card to make it the active unfolding shown on the main canvas.
               </p>
               <button
                 type="button"
@@ -2447,28 +2433,39 @@ export default function App() {
                 <Settings2 className="w-3.5 h-3.5" /> Graph Setup
               </button>
 
-              {/* Desmos-style sequence row list. Bounded height + its own
-                  scrollbar (not the whole sidebar's) so adding many rows
+              {/* One independent card per graph. Bounded height + its own
+                  scrollbar (not the whole sidebar's) so adding many graphs
                   can never push Constrained/Ghost/Search or the rest of the
                   sidebar off screen. */}
-              <div className="space-y-1.5 max-h-56 overflow-y-auto custom-scrollbar pr-0.5 -mr-0.5">
+              <div className="space-y-2 max-h-[32rem] overflow-y-auto custom-scrollbar pr-0.5 -mr-0.5">
                 {sequences.map(row => {
                   const isActive = row.id === activeSequenceId;
                   const parsedStep = parseAngleStep(row.angleStepInput);
                   const modeLabel = parsedStep.valid ? (isExactModeStep(parsedStep.scale, parsedStep.stepUnits) ? 'Exact' : 'Adaptive') : null;
-                  const isDirty = row.draftSequenceText !== row.sequenceText;
                   // A sequence code is meaningless without a base triangle,
                   // so typing is blocked entirely until this row's own
                   // Angle A and B are both set — see the sequence input below.
                   const anglesIncomplete = row.angleA === '' || row.angleB === '';
-                  // Row status: Hidden/Invalid take priority over the plain
-                  // "Editing.../Ready" distinction so a bad edit is never
-                  // masked by the fact that it's also mid-typing.
-                  const rowStatus = !row.visible ? 'Hidden'
+                  const plotInfo = plotStatusById[row.id];
+                  const isPlotting = plotInfo?.status === 'running';
+                  // Status line uses the professor's requested vocabulary
+                  // (Not plotted / Calculating.../Plotted/Hidden/Error),
+                  // with "Needs angles" as a more actionable, more specific
+                  // stand-in for the "can't plot yet" case than a bare
+                  // "Error" would be.
+                  const plotPhase = !row.visible ? 'Hidden'
                     : anglesIncomplete ? 'Needs angles'
-                    : row.validationError ? (/angle/i.test(row.validationError) ? 'Invalid angles' : 'Invalid sequence')
-                    : isDirty ? 'Editing…'
-                    : 'Ready';
+                    : row.validationError ? 'Error'
+                    : isPlotting ? 'Calculating…'
+                    : plotInfo?.status === 'invalid' ? 'Error'
+                    : plotInfo?.status === 'done' ? 'Plotted'
+                    : 'Not plotted';
+                  const plotPhaseColor = plotPhase === 'Plotted' ? 'text-emerald-300'
+                    : plotPhase === 'Calculating…' ? 'text-amber-300'
+                    : plotPhase === 'Hidden' ? 'text-slate-600'
+                    : plotPhase === 'Not plotted' ? 'text-slate-500'
+                    : 'text-red-300';
+                  const canPlotNow = !anglesIncomplete && !!row.sequenceText.trim() && !isPlotting;
                   return (
                     <div
                       key={row.id}
@@ -2508,15 +2505,6 @@ export default function App() {
                         <span className="flex-1" />
                         <button
                           type="button"
-                          onClick={e => { e.stopPropagation(); handleDuplicateSequence(row.id); }}
-                          title={`Duplicate ${row.label}`}
-                          aria-label={`Duplicate ${row.label}`}
-                          className="shrink-0 text-slate-500 hover:text-cyan-200 p-0.5"
-                        >
-                          <Copy className="w-3 h-3" />
-                        </button>
-                        <button
-                          type="button"
                           onClick={e => { e.stopPropagation(); handleRemoveSequence(row.id); }}
                           title={`Delete ${row.label}`}
                           aria-label={`Delete ${row.label}`}
@@ -2525,9 +2513,87 @@ export default function App() {
                           <Trash2 className="w-3 h-3" />
                         </button>
                       </div>
+                      {/* Angle A / Angle B: this graph's own values, editable
+                          directly here (not just displayed) — the active
+                          row's edits go through the same Constrained/Ghost
+                          guard the old top-level inputs used; any other
+                          row's edits are guarded independently. */}
+                      <div className="flex items-center gap-1.5 mt-1.5">
+                        <label className="flex items-center gap-1 flex-1 min-w-0">
+                          <span className="text-[10px] font-bold text-slate-500 shrink-0">A</span>
+                          <input
+                            type="number"
+                            step={angleInputStep}
+                            value={row.angleA}
+                            onFocus={() => handleSelectActiveSequence(row.id)}
+                            onChange={e => { e.stopPropagation(); handleGraphSetupAngleChange(row.id, 'a', e.target.value); }}
+                            onClick={e => e.stopPropagation()}
+                            placeholder="e.g. 15"
+                            aria-label={`${row.label} Angle A`}
+                            className="w-full min-w-0 bg-[#080b0f] border border-white/10 rounded px-1.5 py-1 text-xs font-mono text-slate-100 outline-none placeholder:text-slate-600 focus:border-cyan-300/50"
+                          />
+                        </label>
+                        <label className="flex items-center gap-1 flex-1 min-w-0">
+                          <span className="text-[10px] font-bold text-slate-500 shrink-0">B</span>
+                          <input
+                            type="number"
+                            step={angleInputStep}
+                            value={row.angleB}
+                            onFocus={() => handleSelectActiveSequence(row.id)}
+                            onChange={e => { e.stopPropagation(); handleGraphSetupAngleChange(row.id, 'b', e.target.value); }}
+                            onClick={e => e.stopPropagation()}
+                            placeholder="e.g. 50"
+                            aria-label={`${row.label} Angle B`}
+                            className="w-full min-w-0 bg-[#080b0f] border border-white/10 rounded px-1.5 py-1 text-xs font-mono text-slate-100 outline-none placeholder:text-slate-600 focus:border-cyan-300/50"
+                          />
+                        </label>
+                      </div>
+                      {/* Angle Step and Step Increment each get a full half
+                          of the card's width (not a third shared with A/B)
+                          so a long/precise step value is actually readable
+                          instead of clipped in a cramped box. */}
+                      <div className="flex items-center gap-1.5 mt-1">
+                        <label className="flex items-center gap-1 flex-1 min-w-0">
+                          <span className="text-[10px] font-bold text-slate-500 shrink-0">Step</span>
+                          <input
+                            type="number"
+                            min="0"
+                            step={angleStepControlIncrement}
+                            value={row.angleStepInput}
+                            onChange={e => { e.stopPropagation(); handleSequenceAngleStepChange(row.id, e.target.value); }}
+                            onClick={e => e.stopPropagation()}
+                            title={parsedStep.valid ? `${modeLabel} sampling` : parsedStep.error}
+                            aria-label={`${row.label} Angle Step`}
+                            className={`w-full min-w-0 bg-[#080b0f] border rounded px-1.5 py-1 text-xs font-mono outline-none placeholder:text-slate-600 focus:border-cyan-300/50 ${parsedStep.valid ? 'border-white/10 text-slate-100' : 'border-red-400/50 text-red-200'}`}
+                          />
+                        </label>
+                        <label className="flex items-center gap-1 flex-1 min-w-0">
+                          <span className="text-[10px] font-bold text-slate-500 shrink-0">Increment</span>
+                          <input
+                            type="number"
+                            min="0"
+                            step="any"
+                            value={angleStepControlIncrementInput}
+                            onChange={e => { e.stopPropagation(); setAngleStepControlIncrementInput(e.target.value); }}
+                            onClick={e => e.stopPropagation()}
+                            title="Native spinner/arrow increment used by every graph's Angle Step field."
+                            aria-label="Angle Step spinner increment"
+                            className="w-full min-w-0 bg-[#080b0f] border border-white/10 rounded px-1.5 py-1 text-xs font-mono text-slate-100 outline-none placeholder:text-slate-600 focus:border-cyan-300/50"
+                          />
+                        </label>
+                      </div>
+                      {isActive && lockedShotNotice && !lockedShotNotice.isLengthField && (
+                        <div className="text-[10px] text-amber-100 mt-1.5 font-medium bg-amber-500/10 rounded py-1.5 px-2 border border-amber-300/20 space-y-1">
+                          <div className="font-bold">{lockedShotNotice.field === 'a' ? 'Angle A' : 'Angle B'} of {lockedShotNotice.value} was not applied.</div>
+                          <ul className="list-disc pl-4 space-y-0.5">
+                            {lockedShotNotice.requiredConstraints.map((c, i) => <li key={i}>{c}</li>)}
+                          </ul>
+                          <div><span className="font-bold">How to fix it:</span> {lockedShotNotice.howToFix}</div>
+                        </div>
+                      )}
                       {/* Full-width sequence field on its own line so long
                           codes are actually readable instead of clipped
-                          beside four other controls. Kept `readOnly` (not
+                          beside other controls. Kept `readOnly` (not
                           `disabled`) while angles are incomplete so a click
                           still fires and can explain why, instead of the
                           browser silently swallowing it. */}
@@ -2546,7 +2612,7 @@ export default function App() {
                             title: 'Enter Angle A and Angle B first',
                             sections: [
                               { heading: 'Problem', text: `${row.label} does not have Angle A and Angle B set yet, so it has no base triangle to unfold a code against.` },
-                              { heading: 'How to fix it', text: `${row.label} is now the active row — enter Angle A and Angle B in the Base Geometry panel above. Once both are set, you can type this sequence's code.` },
+                              { heading: 'How to fix it', text: `Enter Angle A and Angle B above on ${row.label}'s own card. Once both are set, you can type this sequence's code.` },
                             ],
                             focusId: null,
                           });
@@ -2565,30 +2631,28 @@ export default function App() {
                         title={anglesIncomplete ? `Set ${row.label}'s Angle A and Angle B above before entering a code.` : 'Type freely, including spaces. Press Enter to apply, Escape to discard the edit.'}
                         className={`mt-1.5 w-full bg-[#080b0f] border rounded px-2 py-1 text-[11px] font-mono outline-none placeholder:text-slate-600 ${anglesIncomplete ? 'border-white/5 text-slate-600 cursor-not-allowed' : 'border-white/10 text-slate-100 focus:border-cyan-300/50'}`}
                       />
-                      {/* Read-only: this sequence's own A/B/Step belong to it
-                          in the data model, but the main controls above are
-                          the only place that edits them (avoids two editors
-                          that can drift out of sync). Its own full-width,
-                          wrapping line so Step is never clipped, with A/B in
-                          a larger, easy-to-scan size. */}
-                      <div
-                        className="flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5 mt-1.5 font-mono"
-                        title="Select this row and use the main controls above to change these."
+                      {/* Per-graph "Plot Valid Angle Region": validates and
+                          calculates only this graph, on the same shared
+                          coordinate system as every other graph — see
+                          handlePlotSequenceNow. */}
+                      <button
+                        type="button"
+                        onClick={e => { e.stopPropagation(); handlePlotSequenceNow(row.id); }}
+                        disabled={!canPlotNow}
+                        title={anglesIncomplete ? 'Set Angle A and Angle B first' : !row.sequenceText.trim() ? 'Enter a sequence code first' : `Calculate and plot ${row.label} on the shared Valid Angle A-B Region graph`}
+                        className="mt-1.5 w-full flex items-center justify-center gap-1.5 bg-cyan-500/15 hover:bg-cyan-500/25 disabled:opacity-40 disabled:cursor-not-allowed border border-cyan-300/30 text-cyan-100 px-2.5 py-1 rounded-md text-[10px] font-bold transition-colors"
                       >
-                        <span className={row.angleA === '' ? 'text-amber-800' : isActive ? 'text-cyan-200' : 'text-slate-300'}>
-                          <span className="text-sm font-bold">A {row.angleA === '' ? '(not set)' : `${row.angleA}°`}</span>
-                        </span>
-                        <span className={row.angleB === '' ? 'text-amber-800' : isActive ? 'text-cyan-200' : 'text-slate-300'}>
-                          <span className="text-sm font-bold">B {row.angleB === '' ? '(not set)' : `${row.angleB}°`}</span>
-                        </span>
-                        <span className="text-[11px] text-slate-500">
-                          Step {row.angleStepInput}{modeLabel ? ` (${modeLabel})` : ''}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-1.5 mt-1">
-                        <span className={`text-[9px] font-bold ${rowStatus === 'Ready' ? 'text-emerald-300' : rowStatus === 'Editing…' ? 'text-amber-300' : rowStatus === 'Hidden' ? 'text-slate-600' : 'text-red-300'}`}>
-                          {rowStatus}
-                        </span>
+                        {isPlotting ? <Loader2 className="w-3 h-3 animate-spin" /> : <ScatterChart className="w-3 h-3" />}
+                        {isPlotting ? 'Calculating…' : 'Plot Valid Angle Region'}
+                      </button>
+                      <div className="flex items-center justify-between gap-1.5 mt-1">
+                        <span className={`text-[9px] font-bold ${plotPhaseColor}`}>{plotPhase}</span>
+                        {plotPhase === 'Plotted' && Number.isFinite(plotInfo?.renderInfo?.durationMs) && (
+                          <span className="text-[9px] text-slate-500 font-mono">
+                            {plotInfo.renderInfo.durationMs < 1 ? '<1' : Math.round(plotInfo.renderInfo.durationMs).toLocaleString()}ms
+                            {plotInfo.renderInfo.fromCache ? ' (cached)' : ''} &middot; {(plotInfo.renderInfo.pointCount ?? 0).toLocaleString()} pts
+                          </span>
+                        )}
                       </div>
                       {row.validationError && (
                         <div className="mt-1 text-[9px] text-red-300">{row.validationError}</div>
@@ -2607,7 +2671,7 @@ export default function App() {
                   onClick={handleAddSequence}
                   className="flex-1 flex items-center justify-center gap-1.5 bg-[#0b1016] hover:bg-[#172230] border border-white/10 hover:border-cyan-300/30 text-slate-300 hover:text-cyan-200 px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-colors"
                 >
-                  <Plus className="w-3.5 h-3.5" /> Add Sequence
+                  <Plus className="w-3.5 h-3.5" /> Add Graph
                 </button>
                 <button
                   type="button"
@@ -2820,10 +2884,11 @@ export default function App() {
                 {activeTriangles.length > 50 && <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 text-center py-2 bg-[#0b1016] rounded-md border border-white/10">...and {activeTriangles.length - 50} more</div>}
               </div>
             </div>
-            
+
           </div>
         </div>
       </div>
+      )}
 
       {/* RIGHT PANEL - SVG CANVAS */}
       <div className="flex-1 min-w-0 relative bg-[#070b10] overflow-hidden">
@@ -3239,6 +3304,8 @@ export default function App() {
           onShowAll={handleShowAllSequences}
           onHideAll={handleHideAllSequences}
           onEditGraphs={() => setIsGraphSetupOpen(true)}
+          onRowStatusChange={(id, info) => setPlotStatusById(prev => ({ ...prev, [id]: info }))}
+          forceGenerateRequest={forceGenerateRequest}
         />
       )}
 
@@ -3249,13 +3316,15 @@ export default function App() {
           sequences={sequences}
           activeSequenceId={activeSequenceId}
           onAdd={handleAddSequence}
-          onDuplicate={handleDuplicateSequence}
           onRemove={handleRemoveSequence}
           onSelect={handleSelectActiveSequence}
           onToggleVisible={handleToggleSequenceVisible}
           onColorChange={handleSequenceColorChange}
           onAngleChange={handleGraphSetupAngleChange}
           onAngleStepChange={handleSequenceAngleStepChange}
+          angleStepControlIncrement={angleStepControlIncrement}
+          stepIncrementInput={angleStepControlIncrementInput}
+          onStepIncrementChange={setAngleStepControlIncrementInput}
           onDraftChange={handleSequenceDraftChange}
           onApplyDraft={handleApplySequenceDraft}
           onCancelDraft={handleCancelSequenceDraft}
