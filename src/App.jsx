@@ -1529,6 +1529,21 @@ export default function App() {
   // Sequence-text <input> elements by row id, so the error modal can return
   // focus to the exact row that was rejected once it's dismissed.
   const sequenceInputRefsRef = useRef({});
+  // The graph-card list's own scroll container, so a newly added card can
+  // be scrolled into view automatically instead of requiring a manual
+  // scroll to find it below the existing cards.
+  const sequenceListRef = useRef(null);
+  const prevSequenceCountRef = useRef(0);
+  useEffect(() => {
+    // Only scroll when a graph was actually *added* (the count grew) — new
+    // rows are always appended at the end, so scrolling this container to
+    // its bottom reveals the new one. Never fires on delete/edit, since
+    // the count either shrinks or stays the same for those.
+    if (sequences.length > prevSequenceCountRef.current && sequenceListRef.current) {
+      sequenceListRef.current.scrollTop = sequenceListRef.current.scrollHeight;
+    }
+    prevSequenceCountRef.current = sequences.length;
+  }, [sequences.length]);
   // The latest stable-region search result is shown until inputs change.
   const [stableRegionResult, setStableRegionResult] = useState(null);
   // Ghost mode compares edits against the constrained path captured when Ghost starts.
@@ -1940,12 +1955,53 @@ export default function App() {
   };
 
   // Error messages always show the typed value rounded to a fixed 3
-  // decimal places (e.g. 14.067), regardless of how many decimals the user
-  // actually entered, so the constraint explanation is easy to read and
-  // consistent no matter the input's own precision.
-  const formatAngleForError = (value) => {
+  // decimal places matching whatever the user actually typed (14 -> 0
+  // decimals, 14.1 -> 1, 14.06 -> 2, 14.067 -> 3, ...), determined from the
+  // raw typed text rather than a fixed precision, so the error always
+  // reads at the same precision the user is already working in.
+  const countDecimalPlaces = (rawText) => {
+    const text = String(rawText ?? '');
+    const dotIndex = text.indexOf('.');
+    if (dotIndex === -1) return 0;
+    return text.slice(dotIndex + 1).replace(/[^0-9]/g, '').length;
+  };
+  const formatToDecimals = (value, decimals) => {
     const n = Number(value);
-    return Number.isFinite(n) ? n.toFixed(3) : String(value ?? '');
+    return Number.isFinite(n) ? n.toFixed(decimals) : String(value ?? '');
+  };
+
+  // Given a candidate (A, B) pair, works out — from the existing geometric
+  // constraints alone (A > 0, B > 0, A < B, A + B <= 90; see
+  // angleValidation.js's isValidAnglePair, which the "Valid Angle A-B
+  // Region" graph already uses) — the closed-form allowed range for
+  // whichever field(s) are out of range, one independent check per field
+  // so a simultaneous problem with both A and B reports both instead of
+  // stopping at the first. This intentionally does NOT attempt to compute
+  // the tighter, sequence-specific sub-range (that region has no closed
+  // form — it's whatever generateAngleRegion.js's sweep finds — so
+  // reporting it as a single min/max pair would just be wrong); the deeper
+  // sequence-specific check still runs separately once the pair passes
+  // these geometric bounds, exactly as it always did.
+  const computeAngleRangeFailures = (candidateA, candidateB, decimalsA, decimalsB) => {
+    const failures = [];
+    const upperForA = Math.min(candidateB, 90 - candidateB);
+    const aOk = Number.isFinite(candidateA) && candidateA > 0 && candidateA < upperForA;
+    if (!aOk) {
+      failures.push({
+        heading: 'Angle A',
+        text: `Angle A = ${formatToDecimals(candidateA, decimalsA)}°\n\nAllowed range:\n${formatToDecimals(0, decimalsA)}° ≤ Angle A ≤ ${formatToDecimals(upperForA, decimalsA)}°`,
+      });
+    }
+    const lowerForB = candidateA;
+    const upperForB = 90 - candidateA;
+    const bOk = Number.isFinite(candidateB) && candidateB > lowerForB && candidateB <= upperForB;
+    if (!bOk) {
+      failures.push({
+        heading: 'Angle B',
+        text: `Angle B = ${formatToDecimals(candidateB, decimalsB)}°\n\nAllowed range:\n${formatToDecimals(lowerForB, decimalsB)}° ≤ Angle B ≤ ${formatToDecimals(upperForB, decimalsB)}°`,
+      });
+    }
+    return failures;
   };
 
   // Draft-only: typing into Angle A/B never validates or recalculates
@@ -1965,11 +2021,12 @@ export default function App() {
   // checked against the new combination instead of one field's fresh draft
   // against the other's stale committed value — and, only if valid,
   // commits both. An invalid pair is left exactly as typed (the draft is
-  // never silently reverted) with validationError set and the shared error
-  // modal explaining why, using the typed values rounded to 3 decimals;
-  // nothing about the graph or main canvas changes until this succeeds.
-  // Used by each field's own Enter/blur, and by the "Plot Valid Angle
-  // Region" button before it calculates, so both act as the same trigger.
+  // never silently reverted); the shared error modal lists every failing
+  // field with its own computed allowed range, at that field's own typed
+  // decimal precision. Nothing about the graph or main canvas changes
+  // until this succeeds. Used by each field's own Enter/blur, and by the
+  // "Plot Valid Angle Region" button before it calculates, so both act as
+  // the same trigger.
   const applyAngleDrafts = (id) => {
     const row = sequences.find(r => r.id === id);
     if (!row) return true;
@@ -1984,35 +2041,39 @@ export default function App() {
     const ghostBypass = isActiveRow && shotEditMode !== SHOT_MODE_LOCKED;
     const bothProvided = draftA !== '' && draftB !== '';
 
-    let reason = null;
+    let failures = [];
     if (!ghostBypass && bothProvided) {
       const candidateA = Number(draftA);
       const candidateB = Number(draftB);
-      if (!Number.isFinite(candidateA) || !Number.isFinite(candidateB) || candidateA <= 0 || candidateB <= 0) {
-        reason = 'Angle A and Angle B must both be positive numbers.';
-      } else if (candidateA >= candidateB) {
-        reason = 'Angle A must be smaller than Angle B.';
-      } else if (candidateA + candidateB > 90) {
-        reason = 'Angle A and Angle B must sum to at most 90°.';
-      } else {
+      const decimalsA = countDecimalPlaces(draftA);
+      const decimalsB = countDecimalPlaces(draftB);
+      failures = computeAngleRangeFailures(candidateA, candidateB, decimalsA, decimalsB);
+      // The deeper blue/black-line check only makes sense once this row
+      // actually has a code to validate against — a brand-new row's code
+      // is itself gated on having angles set first, so skipping this when
+      // there's no code yet (not rejecting with "sequence is empty") is
+      // what breaks that chicken-and-egg deadlock: angles can always be
+      // set on their own geometric merits, and the deep check kicks in
+      // automatically as soon as a code exists to check. It only runs once
+      // the geometric range checks above already pass, since a candidate
+      // outside the simple range has no code-specific triangle to build.
+      if (failures.length === 0 && row.sequenceText.trim()) {
         const validateCandidate = buildValidateCandidateForSequence(row.sequenceText, { a: row.angleA, b: row.angleB, length: baseTriangleLength });
         const result = validateCandidate({ a: candidateA, b: candidateB, length: baseTriangleLength });
-        if (!result.allowed) reason = result.reason;
+        if (!result.allowed) {
+          failures = [{ heading: `Additional requirement for ${row.label}'s sequence`, text: result.reason }];
+        }
       }
     }
 
-    if (reason) {
-      const message = `This sequence cannot be applied because Angle A and Angle B are invalid.\nAngle A: ${formatAngleForError(draftA)}°, Angle B: ${formatAngleForError(draftB)}°.\n${reason}`;
-      setSequences(rows => rows.map(r => r.id === id ? { ...r, validationError: message } : r));
-      setErrorModal({
-        title: 'Invalid angles',
-        sections: [
-          { heading: 'Problem', text: `Angle A (${formatAngleForError(draftA)}°) and Angle B (${formatAngleForError(draftB)}°) are not valid for ${row.label}.` },
-          { heading: 'Required constraints', list: ['Angle A must be greater than 0°.', 'Angle B must be greater than 0°.', 'Angle A must be smaller than Angle B.', 'Angle A + Angle B must be at most 90°.'] },
-          { heading: 'How to fix it', text: reason },
-        ],
-        focusId: null,
-      });
+    if (failures.length > 0) {
+      const sections = [
+        { heading: 'Problem', text: `Angle A and/or Angle B are not valid for ${row.label}.` },
+        ...failures,
+      ];
+      const flat = sections.map(s => `${s.heading}:\n${s.text}`).join('\n\n');
+      setSequences(rows => rows.map(r => r.id === id ? { ...r, validationError: flat } : r));
+      setErrorModal({ title: 'Invalid angles', sections, focusId: null });
       return false;
     }
 
@@ -2534,7 +2595,7 @@ export default function App() {
                   scrollbar (not the whole sidebar's) so adding many graphs
                   can never push Constrained/Ghost/Search or the rest of the
                   sidebar off screen. */}
-              <div className="space-y-2 max-h-[32rem] overflow-y-auto custom-scrollbar pr-0.5 -mr-0.5">
+              <div ref={sequenceListRef} className="space-y-2 max-h-[32rem] overflow-y-auto custom-scrollbar pr-0.5 -mr-0.5">
                 {sequences.map(row => {
                   const isActive = row.id === activeSequenceId;
                   const parsedStep = parseAngleStep(row.angleStepInput);
@@ -3482,16 +3543,6 @@ export default function App() {
               ))}
             </div>
             <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  const flat = errorModal.sections.map(s => `${s.heading}:\n${s.text || (s.list || []).map(item => `• ${item}`).join('\n')}`).join('\n\n');
-                  navigator.clipboard?.writeText(`${errorModal.title}\n\n${flat}`).catch(() => {});
-                }}
-                className="bg-[#0b1016] hover:bg-[#172230] border border-white/10 text-slate-300 px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-colors"
-              >
-                Copy error details
-              </button>
               <button
                 type="button"
                 autoFocus

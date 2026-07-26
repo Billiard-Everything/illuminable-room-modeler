@@ -168,7 +168,16 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
   const lastViewStateRef = useRef(null);
   const prevSequenceSnapshotRef = useRef({}); // id -> { sequenceText, angleStepInput, visible }
   const lastRefreshTokenRef = useRef(refreshToken);
-  const lastForceGenerateTokenRef = useRef(forceGenerateRequest?.token ?? null);
+  // Deliberately initialized to null (never to forceGenerateRequest's
+  // current token) even though this window can mount with a
+  // forceGenerateRequest already set — clicking a row's "Plot Valid Angle
+  // Region" button for the first time opens this window AND sets
+  // forceGenerateRequest in the same click, so on that first mount the prop
+  // already carries the token the effect below is supposed to detect as
+  // new. Seeding the ref from the prop would make that initial token look
+  // already-seen, and the effect would skip scheduling the very job the
+  // click was meant to start.
+  const lastForceGenerateTokenRef = useRef(null);
 
   // Mirrors each row's plot lifecycle out to App.jsx so a graph's card can
   // show "Not plotted / Calculating.../Plotted/Error" even while this
@@ -546,7 +555,14 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
 
   // Build the drawable series list (visible rows only) and the aggregate status line.
   const visibleSequences = sequences.filter((s) => s.visible);
-  const series = visibleSequences.map((seq) => {
+  // The active graph draws last (on top) whenever series overlap, and
+  // stays on top until a different graph becomes active — everything else
+  // keeps its existing relative order, only the active one moves to the
+  // end of the draw order.
+  const orderedVisibleSequences = visibleSequences.some((s) => s.id === activeSequenceId)
+    ? [...visibleSequences.filter((s) => s.id !== activeSequenceId), ...visibleSequences.filter((s) => s.id === activeSequenceId)]
+    : visibleSequences;
+  const series = orderedVisibleSequences.map((seq) => {
     const result = results[seq.id] || emptyRowResult();
     return {
       id: seq.id, label: seq.label, color: seq.color, sequenceText: seq.sequenceText,
