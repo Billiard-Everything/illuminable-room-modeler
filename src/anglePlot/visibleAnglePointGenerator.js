@@ -31,7 +31,15 @@ import {
 } from './renderSamplingPolicy.js';
 
 const yieldToEventLoop = () => new Promise((resolve) => setTimeout(resolve, 0));
-const CELL_TIME_BUDGET_MS = 12;
+// See generateAngleRegion.js's FRAME_BUDGET_MS comment: a 12ms target
+// mostly measures `setTimeout(resolve, 0)`'s own several-ms scheduling
+// overhead rather than real per-chunk work, so a small budget here means
+// more yields than the responsiveness goal actually requires. 40ms is
+// still far below MAX_ADAPTIVE_RENDER_MS (6000ms, checked once per chunk
+// below), so this can only add at most one chunk's worth of overshoot to
+// that cap, and stays comfortably under the ~100ms "feels responsive"
+// threshold for a background computation.
+const CELL_TIME_BUDGET_MS = 40;
 const MIN_CELLS_PER_CHUNK = 50;
 // Strides below this test only the exact cell center (see the ringLimit
 // comment in generateVisibleAnglePoints for why); at or above it, cells

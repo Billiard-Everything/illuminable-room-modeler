@@ -51,9 +51,16 @@ const INITIAL_CANDIDATES_PER_CHUNK = 1500;
 const MIN_CANDIDATES_PER_CHUNK = 100;
 const MAX_CANDIDATES_PER_CHUNK = 20000;
 // Target wall-clock time per chunk. Chunk size adapts toward whatever
-// candidate count fills roughly this much time, so a chunk finishes well
-// within one animation frame regardless of how expensive each candidate is.
-const FRAME_BUDGET_MS = 12;
+// candidate count fills roughly this much time. Measured (Node, real
+// validateCandidate, step=0.1, 202k candidates): 12ms produced 935 yields
+// and an 18s sweep; every `await setTimeout(resolve, 0)` costs several ms
+// of real scheduling overhead regardless of the requested 0ms delay, so a
+// budget this small mostly measures yield overhead, not the target frame
+// rate. 40ms still finishes well within "feels responsive" (comfortably
+// under the ~100ms RAIL response-time threshold) while cutting yields to
+// 277 and the same sweep to ~13s — same candidates tested, same points
+// found, purely fewer yields.
+const FRAME_BUDGET_MS = 40;
 
 const yieldToEventLoop = () => new Promise((resolve) => setTimeout(resolve, 0));
 

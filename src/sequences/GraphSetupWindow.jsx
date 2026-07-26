@@ -1,4 +1,4 @@
-import { Copy, Eye, EyeOff, Plus, ScatterChart, Trash2, X } from 'lucide-react';
+import { Eye, EyeOff, Plus, ScatterChart, Trash2, X } from 'lucide-react';
 import { isExactModeStep, parseAngleStep } from '../anglePlot/angleStep.js';
 
 // GraphSetupWindow is an additive editor for the existing sequence rows. It
@@ -10,13 +10,15 @@ export default function GraphSetupWindow({
   sequences,
   activeSequenceId,
   onAdd,
-  onDuplicate,
   onRemove,
   onSelect,
   onToggleVisible,
   onColorChange,
   onAngleChange,
   onAngleStepChange,
+  angleStepControlIncrement,
+  stepIncrementInput,
+  onStepIncrementChange,
   onDraftChange,
   onApplyDraft,
   onCancelDraft,
@@ -116,15 +118,6 @@ export default function GraphSetupWindow({
                     </button>
                     <button
                       type="button"
-                      onClick={() => onDuplicate(row.id)}
-                      aria-label={`Duplicate ${row.label}`}
-                      title={`Duplicate ${row.label}`}
-                      className="rounded p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-cyan-100"
-                    >
-                      <Copy className="h-4 w-4" />
-                    </button>
-                    <button
-                      type="button"
                       onClick={() => onRemove(row.id)}
                       aria-label={`Delete ${row.label}`}
                       title={`Delete ${row.label}`}
@@ -164,9 +157,23 @@ export default function GraphSetupWindow({
                       <input
                         type="number"
                         min="0"
+                        step={angleStepControlIncrement}
                         value={row.angleStepInput}
                         onChange={event => onAngleStepChange(row.id, event.target.value)}
                         placeholder="0.1"
+                        className="w-full rounded-md border border-white/10 bg-[#080b0f] px-2 py-1.5 font-mono text-xs text-slate-100 outline-none placeholder:text-slate-600 focus:border-cyan-300/60"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Step Increment</span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="any"
+                        value={stepIncrementInput}
+                        onChange={event => onStepIncrementChange(event.target.value)}
+                        title="Native spinner/arrow increment used by every graph's Angle Step field."
+                        placeholder="0.0001"
                         className="w-full rounded-md border border-white/10 bg-[#080b0f] px-2 py-1.5 font-mono text-xs text-slate-100 outline-none placeholder:text-slate-600 focus:border-cyan-300/60"
                       />
                     </label>
