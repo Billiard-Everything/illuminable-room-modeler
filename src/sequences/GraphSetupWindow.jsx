@@ -14,8 +14,12 @@ export default function GraphSetupWindow({
   onSelect,
   onToggleVisible,
   onColorChange,
-  onAngleChange,
-  onAngleStepChange,
+  onAngleDraftChange,
+  onApplyAngleDraft,
+  onCancelAngleDraft,
+  onAngleStepDraftChange,
+  onApplyAngleStepDraft,
+  onCancelAngleStepDraft,
   angleStepControlIncrement,
   stepIncrementInput,
   onStepIncrementChange,
@@ -37,6 +41,31 @@ export default function GraphSetupWindow({
     } else if (event.key === 'Escape') {
       event.preventDefault();
       onCancelDraft(id);
+      event.currentTarget.blur();
+    }
+  };
+
+  // Angle A/B and Angle Step share the same type-freely/apply-on-Enter
+  // contract as the sequence code field above: `apply` runs on Enter or
+  // blur, `cancel` discards the pending edit on Escape. Nothing validates
+  // or recalculates while the user is still typing.
+  const handleAngleKeyDown = (event, id) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      onApplyAngleDraft(id);
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      onCancelAngleDraft(id);
+      event.currentTarget.blur();
+    }
+  };
+  const handleAngleStepKeyDown = (event, id) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      onApplyAngleStepDraft(id);
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      onCancelAngleStepDraft(id);
       event.currentTarget.blur();
     }
   };
@@ -133,10 +162,13 @@ export default function GraphSetupWindow({
                       <input
                         type="number"
                         step="0.1"
-                        value={row.angleA}
+                        value={row.draftAngleA}
                         onFocus={() => onSelect(row.id)}
-                        onChange={event => onAngleChange(row.id, 'a', event.target.value)}
+                        onChange={event => onAngleDraftChange(row.id, 'a', event.target.value)}
+                        onKeyDown={event => handleAngleKeyDown(event, row.id)}
+                        onBlur={() => onApplyAngleDraft(row.id)}
                         placeholder="e.g. 15"
+                        title="Press Enter to apply, Escape to discard the edit."
                         className="w-full rounded-md border border-white/10 bg-[#080b0f] px-2 py-1.5 font-mono text-xs text-slate-100 outline-none placeholder:text-slate-600 focus:border-cyan-300/60"
                       />
                     </label>
@@ -145,10 +177,13 @@ export default function GraphSetupWindow({
                       <input
                         type="number"
                         step="0.1"
-                        value={row.angleB}
+                        value={row.draftAngleB}
                         onFocus={() => onSelect(row.id)}
-                        onChange={event => onAngleChange(row.id, 'b', event.target.value)}
+                        onChange={event => onAngleDraftChange(row.id, 'b', event.target.value)}
+                        onKeyDown={event => handleAngleKeyDown(event, row.id)}
+                        onBlur={() => onApplyAngleDraft(row.id)}
                         placeholder="e.g. 50"
+                        title="Press Enter to apply, Escape to discard the edit."
                         className="w-full rounded-md border border-white/10 bg-[#080b0f] px-2 py-1.5 font-mono text-xs text-slate-100 outline-none placeholder:text-slate-600 focus:border-cyan-300/60"
                       />
                     </label>
@@ -158,9 +193,12 @@ export default function GraphSetupWindow({
                         type="number"
                         min="0"
                         step={angleStepControlIncrement}
-                        value={row.angleStepInput}
-                        onChange={event => onAngleStepChange(row.id, event.target.value)}
+                        value={row.draftAngleStepInput}
+                        onChange={event => onAngleStepDraftChange(row.id, event.target.value)}
+                        onKeyDown={event => handleAngleStepKeyDown(event, row.id)}
+                        onBlur={() => onApplyAngleStepDraft(row.id)}
                         placeholder="0.1"
+                        title="Press Enter to apply, Escape to discard the edit."
                         className="w-full rounded-md border border-white/10 bg-[#080b0f] px-2 py-1.5 font-mono text-xs text-slate-100 outline-none placeholder:text-slate-600 focus:border-cyan-300/60"
                       />
                     </label>
