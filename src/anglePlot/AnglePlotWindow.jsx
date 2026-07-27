@@ -86,21 +86,40 @@ const MAX_CONCURRENT_SEQUENCE_JOBS = 2;
 
 const emptyRowResult = () => ({ points: [], status: 'idle', renderInfo: null, progress: null, error: null });
 
-export default function AnglePlotWindow({ sequences, activeSequenceId, angleParams, baseLength, buildValidateCandidateForSequence, refreshToken, onClose, onShowAll, onHideAll, onEditGraphs, onRowStatusChange, forceGenerateRequest }) {
-  const [pos, setPos] = useState({ x: 96, y: 72 });
-  const [size, setSize] = useState(DEFAULT_SIZE);
+// How long to wait, after this window's own state (position, size,
+// minimize/maximize, view lock, or the shared panel's zoom/pan) last
+// changed, before reporting it upward via onWorkspaceStateChange — kept
+// separate from RENDER_DEBOUNCE_MS since this drives workspace
+// persistence, not rendering, and can tolerate a slightly longer delay to
+// keep autosave writes infrequent even during continuous dragging/zooming.
+const WORKSPACE_REPORT_DEBOUNCE_MS = 600;
+
+export default function AnglePlotWindow({
+  sequences, activeSequenceId, angleParams, baseLength, buildValidateCandidateForSequence, refreshToken,
+  onClose, onShowAll, onHideAll, onEditGraphs, onRowStatusChange, forceGenerateRequest,
+  // All optional, all defaulting to this window's original hardcoded
+  // defaults — a caller that never passes these (there was only one
+  // caller before workspace persistence existed) sees exactly the same
+  // opening state as before. See App.jsx's workspace restore for the one
+  // caller that does pass a previously saved state.
+  initialPos, initialSize, initialIsMinimized, initialIsMaximized, initialIsViewLocked, initialLegendCollapsed,
+  initialPanelZoom, initialPanelPan,
+  onWorkspaceStateChange,
+}) {
+  const [pos, setPos] = useState(() => initialPos ?? { x: 96, y: 72 });
+  const [size, setSize] = useState(() => initialSize ?? DEFAULT_SIZE);
   const dragOffset = useRef(null);
   const resizeStart = useRef(null);
   // Minimized collapses the whole window down to just its title bar (like a
   // normal OS window minimize) without closing it or losing any state —
   // every job/result/view setting below is untouched and reappears exactly
   // as it was on restore.
-  const [isMinimized, setIsMinimized] = useState(false);
+  const [isMinimized, setIsMinimized] = useState(() => initialIsMinimized ?? false);
   // Maximized fills the available viewport (minus a small margin) instead
   // of the window's normal draggable/resizable box. `preMaximizeRef` holds
   // the pos/size to restore exactly on un-maximize, so toggling it off
   // never leaves the window at a different spot/size than before.
-  const [isMaximized, setIsMaximized] = useState(false);
+  const [isMaximized, setIsMaximized] = useState(() => initialIsMaximized ?? false);
   const preMaximizeRef = useRef(null);
   const MAXIMIZE_MARGIN = 12;
   const toggleMaximize = () => {
@@ -137,8 +156,8 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
 
   // Per-sequence-id render results/status. Never cleared on hide, only on delete.
   const [results, setResults] = useState({});
-  const [isViewLocked, setIsViewLocked] = useState(false);
-  const [legendCollapsed, setLegendCollapsed] = useState(false);
+  const [isViewLocked, setIsViewLocked] = useState(() => initialIsViewLocked ?? false);
+  const [legendCollapsed, setLegendCollapsed] = useState(() => initialLegendCollapsed ?? false);
   const panelRef = useRef(null);
 
   const currentPoint = { a: Number(angleParams.a), b: Number(angleParams.b) };
@@ -154,12 +173,43 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
   const buildValidateCandidateForSequenceRef = useRef(buildValidateCandidateForSequence);
   const resultsRef = useRef(results);
   const onRowStatusChangeRef = useRef(onRowStatusChange);
+  const onWorkspaceStateChangeRef = useRef(onWorkspaceStateChange);
   useEffect(() => {
     sequencesRef.current = sequences;
     buildValidateCandidateForSequenceRef.current = buildValidateCandidateForSequence;
     resultsRef.current = results;
     onRowStatusChangeRef.current = onRowStatusChange;
-  }, [sequences, buildValidateCandidateForSequence, results, onRowStatusChange]);
+    onWorkspaceStateChangeRef.current = onWorkspaceStateChange;
+  }, [sequences, buildValidateCandidateForSequence, results, onRowStatusChange, onWorkspaceStateChange]);
+
+  // Workspace persistence (see App.jsx's WorkspaceManager integration):
+  // reports this window's own position/size/minimize/maximize/view-lock
+  // state, plus the shared panel's zoom/pan (captured via handleViewChange
+  // below — the panel itself owns that state, this window only mirrors
+  // it), debounced so continuous dragging/zooming doesn't trigger a write
+  // on every frame. panelViewRef starts from whatever was last restored,
+  // so a workspace save that happens before the panel ever reports its own
+  // view change (e.g. the window opens but nothing is dragged/zoomed) still
+  // reports the correct, previously-restored view instead of some default.
+  const panelViewRef = useRef({ panelZoom: initialPanelZoom, panelPan: initialPanelPan });
+  const workspaceReportTimeoutRef = useRef(null);
+  const scheduleWorkspaceReport = useCallback(() => {
+    if (!onWorkspaceStateChangeRef.current) return;
+    if (workspaceReportTimeoutRef.current) clearTimeout(workspaceReportTimeoutRef.current);
+    workspaceReportTimeoutRef.current = setTimeout(() => {
+      workspaceReportTimeoutRef.current = null;
+      onWorkspaceStateChangeRef.current?.({
+        pos, size, isMinimized, isMaximized, isViewLocked, legendCollapsed,
+        panelZoom: panelViewRef.current.panelZoom, panelPan: panelViewRef.current.panelPan,
+      });
+    }, WORKSPACE_REPORT_DEBOUNCE_MS);
+  }, [pos, size, isMinimized, isMaximized, isViewLocked, legendCollapsed]);
+  useEffect(() => {
+    scheduleWorkspaceReport();
+  }, [scheduleWorkspaceReport]);
+  useEffect(() => () => {
+    if (workspaceReportTimeoutRef.current) clearTimeout(workspaceReportTimeoutRef.current);
+  }, []);
 
   const debounceTimersRef = useRef({}); // id -> timeout handle
   const jobTaskRef = useRef({}); // id -> { promise, cancel }
@@ -474,6 +524,11 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
   // sampler's stride and sampled cells both depend on the current viewport.
   const handleViewChange = useCallback((viewState) => {
     lastViewStateRef.current = viewState;
+    // Workspace persistence: AnglePlotPanel's onViewChange reports its own
+    // raw zoom/pan alongside the derived zoomLevel/bounds it always has, so
+    // this can just take them directly instead of reconstructing anything.
+    panelViewRef.current = { panelZoom: viewState.zoom, panelPan: viewState.pan };
+    scheduleWorkspaceReport();
     for (const seq of sequencesRef.current) {
       if (!seq.visible) continue;
       const parsed = parseAngleStep(seq.angleStepInput);
@@ -485,7 +540,7 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
       if (chooseRenderer({ scale: parsed.scale, stepUnits: parsed.stepUnits }).mode === RENDERER_MODE.BRUTE_FORCE) continue;
       scheduleRenderForSequence(seq, viewState);
     }
-  }, [scheduleRenderForSequence]);
+  }, [scheduleRenderForSequence, scheduleWorkspaceReport]);
 
   const runGeneration = useCallback(() => {
     for (const seq of sequences) {
@@ -737,6 +792,8 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
           currentPoint={currentPoint}
           isLocked={isViewLocked}
           onViewChange={handleViewChange}
+          initialZoom={initialPanelZoom}
+          initialPan={initialPanelPan}
         />
       </div>
 
