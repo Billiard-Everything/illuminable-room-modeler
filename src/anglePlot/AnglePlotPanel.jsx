@@ -40,15 +40,16 @@ const POINT_HIT_RADIUS_PX = 7;
 // as "the same spot" for one combined hover, once the nearest point under
 // the cursor is found (see findPointsNearScreenPosition's doc comment).
 const HOVER_MERGE_RADIUS_PX = 4;
-// Estimated on-screen footprint of the always-on coordinate tooltip (see
-// hoverCoord below), used only to keep it fully inside the plot's own
-// bounds near an edge/corner — not an exact measurement, just wide/tall
-// enough for "A = 90.000°" / "B = 90.000°" at the largest realistic
-// precision without the box needing to reflow.
+// Estimated on-screen footprint of the click-triggered coordinate tooltip
+// (see clickedCoord below), used only to keep it fully inside the plot's
+// own bounds near an edge/corner — not an exact measurement, just
+// wide/tall enough for "A = 90.000°" / "B = 90.000°" at the largest
+// realistic precision without the box needing to reflow.
 const COORD_TOOLTIP_WIDTH_PX = 116;
 const COORD_TOOLTIP_HEIGHT_PX = 46;
-// Offset from the cursor's exact tip so the tooltip sits beside/above it
-// instead of directly under the pointer, where it would block the cursor.
+// Offset from the clicked point's exact position so the tooltip sits
+// beside/above it instead of directly on top, where it would block the
+// point itself.
 const COORD_TOOLTIP_OFFSET_PX = 14;
 // Individual-point marker radius used in POINTS mode (see pickRenderMode
 // below) — the "normal" size at that zoom level. DENSE and OCCUPANCY modes
@@ -220,10 +221,12 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ series, currentPoint
   const dragStart = useRef({ x: 0, y: 0 });
   const [hoverMatches, setHoverMatches] = useState([]);
   const [pinnedMatches, setPinnedMatches] = useState([]);
-  // Raw cursor position in graph coordinates, updated on every mousemove
-  // anywhere in the plot (not just near a plotted point) — see the
-  // always-on coordinate readout in the JSX below.
-  const [hoverCoord, setHoverCoord] = useState(null);
+  // Graph coordinates at the last click inside the [0, 90] x [0, 90] domain
+  // box (not a continuous hover readout, and not shown for a click outside
+  // the box) — set/cleared in handleClick below, and left in place across
+  // mouse-leave the same way pinnedMatches already is, until the next click
+  // replaces or clears it.
+  const [clickedCoord, setClickedCoord] = useState(null);
 
   // Track the container's actual pixel size so the canvas drawing buffer
   // (not just its CSS box) stays sharp after the window is resized.
@@ -609,10 +612,7 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ series, currentPoint
   // them (renderSamplingPolicy.js). Raw mousemove events can fire far more
   // often than the display actually refreshes, so that scan is coalesced to
   // once per animation frame here: multiple mousemove events between two
-  // paints only ever run it once, with the latest cursor position. Reading
-  // the cursor's data-space coordinate (toDataA/toDataB below) is plain O(1)
-  // arithmetic, so it is never throttled — it stays exactly as smooth as the
-  // mouse itself.
+  // paints only ever run it once, with the latest cursor position.
   const hoverRafRef = useRef(null);
   const pendingHoverRef = useRef(null);
   useEffect(() => () => {
@@ -623,13 +623,6 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ series, currentPoint
     const rect = containerRef.current.getBoundingClientRect();
     const screenX = e.clientX - rect.left;
     const screenY = e.clientY - rect.top;
-    // Coordinates under the cursor, computed from the current zoom/pan
-    // transform (toDataA/toDataB), so this always reflects the exact graph
-    // location regardless of zoom level or pan position — and works over
-    // the whole graph area, not just near a plotted point. screenX/screenY
-    // (the raw cursor position) are kept alongside so the tooltip can be
-    // anchored right next to the cursor, not just to the data point.
-    setHoverCoord({ a: toDataA(screenX), b: toDataB(screenY), screenX, screenY });
     if (isDragging) {
       const dx = (e.clientX - dragStart.current.x) / zoom;
       const dy = (e.clientY - dragStart.current.y) / zoom;
@@ -651,27 +644,38 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ series, currentPoint
 
   const handleMouseLeave = () => {
     setIsDragging(false);
-    setHoverCoord(null);
     setHoverMatches([]);
   };
 
   const handleClick = (e) => {
     const rect = containerRef.current.getBoundingClientRect();
-    setPinnedMatches(findMatchesAt(e.clientX - rect.left, e.clientY - rect.top));
+    const screenX = e.clientX - rect.left;
+    const screenY = e.clientY - rect.top;
+    setPinnedMatches(findMatchesAt(screenX, screenY));
+
+    // Coordinate readout: only for a click landing inside the [0, 90] x
+    // [0, 90] domain box (toDataA/toDataB already reflect the current
+    // zoom/pan transform, so this is correct at any view) — a click outside
+    // the box hides whatever was previously shown instead of leaving a
+    // stale reading up.
+    const clickedA = toDataA(screenX);
+    const clickedB = toDataB(screenY);
+    const insideDomainBox = clickedA >= AXIS_DOMAIN_MIN && clickedA <= AXIS_DOMAIN_MAX && clickedB >= AXIS_DOMAIN_MIN && clickedB <= AXIS_DOMAIN_MAX;
+    setClickedCoord(insideDomainBox ? { a: clickedA, b: clickedB, screenX, screenY } : null);
   };
 
   const tooltipMatches = pinnedMatches.length > 0 ? pinnedMatches : hoverMatches;
   const tooltipAnchor = tooltipMatches[0];
 
-  // Cursor-following coordinate tooltip position: offset up-and-right of
-  // the cursor by default so it never sits under (and never blocks) the
-  // pointer itself, clamped so it stays fully inside the plot's own bounds
-  // even right at an edge/corner instead of spilling outside the graph.
-  const coordTooltipLeft = hoverCoord
-    ? Math.min(Math.max(hoverCoord.screenX + COORD_TOOLTIP_OFFSET_PX, 4), size.width - COORD_TOOLTIP_WIDTH_PX - 4)
+  // Click-anchored coordinate tooltip position: offset up-and-right of the
+  // clicked point by default so it never sits under (and never blocks) the
+  // cursor, clamped so it stays fully inside the plot's own bounds even
+  // right at an edge/corner instead of spilling outside the graph.
+  const coordTooltipLeft = clickedCoord
+    ? Math.min(Math.max(clickedCoord.screenX + COORD_TOOLTIP_OFFSET_PX, 4), size.width - COORD_TOOLTIP_WIDTH_PX - 4)
     : 0;
-  const coordTooltipTop = hoverCoord
-    ? Math.min(Math.max(hoverCoord.screenY - COORD_TOOLTIP_HEIGHT_PX - COORD_TOOLTIP_OFFSET_PX, 4), size.height - COORD_TOOLTIP_HEIGHT_PX - 4)
+  const coordTooltipTop = clickedCoord
+    ? Math.min(Math.max(clickedCoord.screenY - COORD_TOOLTIP_HEIGHT_PX - COORD_TOOLTIP_OFFSET_PX, 4), size.height - COORD_TOOLTIP_HEIGHT_PX - 4)
     : 0;
 
   return (
@@ -696,24 +700,24 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ series, currentPoint
               No visible graphs — enable a sequence to plot it here
             </div>
           )}
-          {/* Always-on coordinate tooltip: reflects the exact graph location
-              under the cursor anywhere in the plot (not just near a plotted
-              point), respecting the current zoom/pan transform, and follows
-              the cursor rather than sitting in a fixed corner. Light
+          {/* Click-triggered coordinate tooltip: shown only after a click
+              that lands inside the [0, 90] x [0, 90] domain box (never on
+              hover, and never for a click outside the box), reflecting the
+              exact graph location at the current zoom/pan transform. Light
               background + dark text regardless of app theme, since this
               plot's own canvas is always a plain white box (see the
               CANVAS_PALETTE comment above) — a dark tooltip here would be
-              hard to read against it. Positioned beside/above the cursor
-              (never under it) and clamped to the plot's own bounds near an
-              edge — a separate element from the nearest-point tooltip below,
-              so the two never fight over the same screen space. */}
-          {hoverCoord && (
+              hard to read against it. Positioned beside/above the clicked
+              point and clamped to the plot's own bounds near an edge — a
+              separate element from the nearest-point tooltip below, so the
+              two never fight over the same screen space. */}
+          {clickedCoord && (
             <div
               className="pointer-events-none absolute bg-white/95 border border-slate-300 rounded-md px-2 py-1 text-[11px] font-mono font-semibold text-slate-800 shadow-[0_4px_16px_rgba(0,0,0,0.28)] leading-tight"
               style={{ left: coordTooltipLeft, top: coordTooltipTop }}
             >
-              <div>A = {formatAngleDegrees(hoverCoord.a, displayScale)}&deg;</div>
-              <div>B = {formatAngleDegrees(hoverCoord.b, displayScale)}&deg;</div>
+              <div>A = {formatAngleDegrees(clickedCoord.a, displayScale)}&deg;</div>
+              <div>B = {formatAngleDegrees(clickedCoord.b, displayScale)}&deg;</div>
             </div>
           )}
           {tooltipAnchor && (
