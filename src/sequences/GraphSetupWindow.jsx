@@ -163,7 +163,6 @@ export default function GraphSetupWindow({
                         onFocus={() => onSelect(row.id)}
                         onChange={event => onAngleDraftChange(row.id, 'a', event.target.value)}
                         onKeyDown={event => handleAngleKeyDown(event, row.id)}
-                        onBlur={() => onApplyAngleDraft(row.id)}
                         placeholder="e.g. 15"
                         title="Press Enter to apply, Escape to discard the edit."
                         className="w-full rounded-md border border-white/10 bg-[#080b0f] px-2 py-1.5 font-mono text-xs text-slate-100 outline-none placeholder:text-slate-600 focus:border-cyan-300/60"
@@ -178,7 +177,6 @@ export default function GraphSetupWindow({
                         onFocus={() => onSelect(row.id)}
                         onChange={event => onAngleDraftChange(row.id, 'b', event.target.value)}
                         onKeyDown={event => handleAngleKeyDown(event, row.id)}
-                        onBlur={() => onApplyAngleDraft(row.id)}
                         placeholder="e.g. 50"
                         title="Press Enter to apply, Escape to discard the edit."
                         className="w-full rounded-md border border-white/10 bg-[#080b0f] px-2 py-1.5 font-mono text-xs text-slate-100 outline-none placeholder:text-slate-600 focus:border-cyan-300/60"
@@ -193,7 +191,6 @@ export default function GraphSetupWindow({
                         value={row.draftAngleStepInput}
                         onChange={event => onAngleStepDraftChange(row.id, event.target.value)}
                         onKeyDown={event => handleAngleStepKeyDown(event, row.id)}
-                        onBlur={() => onApplyAngleStepDraft(row.id)}
                         placeholder="0.1"
                         title="Press Enter to apply, Escape to discard the edit."
                         className="w-full rounded-md border border-white/10 bg-[#080b0f] px-2 py-1.5 font-mono text-xs text-slate-100 outline-none placeholder:text-slate-600 focus:border-cyan-300/60"
@@ -226,7 +223,6 @@ export default function GraphSetupWindow({
                       onFocus={() => onSelect(row.id)}
                       onChange={event => onDraftChange(row.id, event.target.value)}
                       onKeyDown={event => handleKeyDown(event, row.id, anglesIncomplete)}
-                      onBlur={() => { if (!anglesIncomplete) onApplyDraft(row.id); }}
                       placeholder={anglesIncomplete ? 'Set Angle A and B first' : 'e.g. 3 1 7 2 6'}
                       aria-disabled={anglesIncomplete}
                       title={anglesIncomplete ? 'Set both angles before entering the sequence code.' : 'Press Enter to apply or Escape to discard changes.'}

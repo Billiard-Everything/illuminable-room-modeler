@@ -2066,7 +2066,12 @@ export default function App() {
   // these geometric bounds, exactly as it always did.
   const computeAngleRangeFailures = (candidateA, candidateB, decimalsA, decimalsB) => {
     const failures = [];
-    const upperForA = Math.min(candidateB, 90 - candidateB);
+    // Clamped at 0 so a wildly out-of-range B (e.g. 466, itself already
+    // reported as its own failure below) can never make this read as a
+    // backwards range like "0 <= Angle A <= -376" — once B is that far off,
+    // no A value works yet either, which a degenerate 0-to-0 range still
+    // communicates correctly without the confusing negative upper bound.
+    const upperForA = Math.max(0, Math.min(candidateB, 90 - candidateB));
     const aOk = Number.isFinite(candidateA) && candidateA > 0 && candidateA < upperForA;
     if (!aOk) {
       failures.push({
@@ -2074,9 +2079,13 @@ export default function App() {
         text: `Angle A = ${formatToDecimals(candidateA, decimalsA)}°\n\nAllowed range:\n${formatToDecimals(0, decimalsA)}° ≤ Angle A ≤ ${formatToDecimals(upperForA, decimalsA)}°`,
       });
     }
-    const lowerForB = candidateA;
-    const upperForB = 90 - candidateA;
-    const bOk = Number.isFinite(candidateB) && candidateB > lowerForB && candidateB <= upperForB;
+    // Same backwards-range guard as upperForA above: an out-of-range A
+    // (e.g. negative, or past 90) must never turn this into "500 <= Angle B
+    // <= -410". Clamped so lowerForB is never negative and upperForB never
+    // ends up below it.
+    const lowerForB = Math.max(0, candidateA);
+    const upperForB = Math.max(lowerForB, 90 - candidateA);
+    const bOk = Number.isFinite(candidateB) && candidateB > candidateA && candidateB <= 90 - candidateA;
     if (!bOk) {
       failures.push({
         heading: 'Angle B',
@@ -2799,10 +2808,15 @@ export default function App() {
                         </button>
                       </div>
                       {/* Angle A / Angle B: type freely — nothing is
-                          validated or recalculated until Enter, blur, or
-                          "Plot Valid Angle Region" (see applyAngleDrafts).
-                          An invalid pair is left exactly as typed; the
-                          error explains why via the shared modal. */}
+                          validated or recalculated until Enter or "Plot
+                          Valid Angle Region" (see applyAngleDrafts).
+                          Deliberately NOT on blur: clicking/tabbing to a
+                          different field (or a different graph card
+                          entirely) must never interrupt still-in-progress
+                          editing with a validation error — only an explicit
+                          Enter or Plot ends the edit. An invalid pair is
+                          left exactly as typed; the error explains why via
+                          the shared modal. */}
                       <div className="flex items-center gap-1.5 mt-1.5">
                         <label className="flex items-center gap-1 flex-1 min-w-0">
                           <span className="text-[10px] font-bold text-slate-500 shrink-0">A</span>
@@ -2817,7 +2831,6 @@ export default function App() {
                               if (e.key === 'Enter') { e.preventDefault(); applyAngleDrafts(row.id); }
                               else if (e.key === 'Escape') { e.preventDefault(); handleCancelAngleDraft(row.id); e.currentTarget.blur(); }
                             }}
-                            onBlur={() => applyAngleDrafts(row.id)}
                             onClick={e => e.stopPropagation()}
                             placeholder="e.g. 15"
                             aria-label={`${row.label} Angle A`}
@@ -2838,7 +2851,6 @@ export default function App() {
                               if (e.key === 'Enter') { e.preventDefault(); applyAngleDrafts(row.id); }
                               else if (e.key === 'Escape') { e.preventDefault(); handleCancelAngleDraft(row.id); e.currentTarget.blur(); }
                             }}
-                            onBlur={() => applyAngleDrafts(row.id)}
                             onClick={e => e.stopPropagation()}
                             placeholder="e.g. 50"
                             aria-label={`${row.label} Angle B`}
@@ -2867,7 +2879,6 @@ export default function App() {
                               if (e.key === 'Enter') { e.preventDefault(); applyAngleStepDraft(row.id); }
                               else if (e.key === 'Escape') { e.preventDefault(); handleCancelAngleStepDraft(row.id); e.currentTarget.blur(); }
                             }}
-                            onBlur={() => applyAngleStepDraft(row.id)}
                             onClick={e => e.stopPropagation()}
                             title="Press Enter to apply, Escape to discard the edit."
                             aria-label={`${row.label} Angle Step`}
@@ -2922,7 +2933,6 @@ export default function App() {
                           if (e.key === 'Enter') { e.preventDefault(); handleApplySequenceDraft(row.id); }
                           else if (e.key === 'Escape') { e.preventDefault(); handleCancelSequenceDraft(row.id); e.currentTarget.blur(); }
                         }}
-                        onBlur={() => handleApplySequenceDraft(row.id)}
                         placeholder={anglesIncomplete ? 'Enter Angle A/B above first' : 'e.g. 1 5 16 5 1 2 3 6'}
                         aria-label={`${row.label} sequence text`}
                         aria-disabled={anglesIncomplete}
