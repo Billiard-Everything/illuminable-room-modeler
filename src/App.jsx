@@ -2002,7 +2002,7 @@ export default function App() {
     } else {
       // Angle A/B belong to the active row only; every other row is untouched.
       const rowField = field === 'a' ? 'angleA' : 'angleB';
-      setSequences(rows => rows.map(row => row.id === activeSequenceId ? { ...row, [rowField]: value, validationError: null } : row));
+      setSequences(rows => rows.map(row => row.id === activeSequenceId ? { ...row, [rowField]: value, validationError: null, validationErrorSource: null } : row));
     }
   };
 
@@ -2074,7 +2074,7 @@ export default function App() {
 
   // Escape discards in-progress Angle A/B edits and restores the last applied values.
   const handleCancelAngleDraft = (id) => {
-    setSequences(rows => rows.map(row => row.id === id ? { ...row, draftAngleA: row.angleA, draftAngleB: row.angleB, validationError: null } : row));
+    setSequences(rows => rows.map(row => row.id === id ? { ...row, draftAngleA: row.angleA, draftAngleB: row.angleB, validationError: null, validationErrorSource: null } : row));
   };
 
   // Validates this row's pending Angle A/B draft — as a *pair*, together,
@@ -2093,7 +2093,17 @@ export default function App() {
     if (!row) return true;
     const draftA = row.draftAngleA;
     const draftB = row.draftAngleB;
-    if (draftA === row.angleA && draftB === row.angleB) return true;
+    // The draft matching what's already committed means there is nothing
+    // NEW to commit, but it does NOT mean a currently-displayed angle
+    // validationError is still accurate — e.g. the user broke this row's
+    // angles, saw an error, and then retyped the exact value that was
+    // already committed. Falling through in that case re-runs the checks
+    // below against the current (still-committed, still-valid) values,
+    // which is what actually clears the stale error instead of short-
+    // circuiting past it. Gated on validationErrorSource === 'angle' (not
+    // just any validationError) so an unrelated Step or Sequence error
+    // showing at the same time is never touched by this field's own apply.
+    if (draftA === row.angleA && draftB === row.angleB && !(row.validationError && row.validationErrorSource === 'angle')) return true;
 
     const isActiveRow = id === activeSequenceId;
     // Ghost mode's whole purpose is inspecting otherwise-invalid geometry
@@ -2133,12 +2143,12 @@ export default function App() {
         ...failures,
       ];
       const flat = sections.map(s => `${s.heading}:\n${s.text}`).join('\n\n');
-      setSequences(rows => rows.map(r => r.id === id ? { ...r, validationError: flat } : r));
+      setSequences(rows => rows.map(r => r.id === id ? { ...r, validationError: flat, validationErrorSource: 'angle' } : r));
       setErrorModal({ title: 'Invalid angles', sections, focusId: null });
       return false;
     }
 
-    setSequences(rows => rows.map(r => r.id === id ? { ...r, angleA: draftA, angleB: draftB, validationError: null } : r));
+    setSequences(rows => rows.map(r => r.id === id ? { ...r, angleA: draftA, angleB: draftB, validationError: null, validationErrorSource: null } : r));
     if (isActiveRow) resetShotConstraintReference();
     return true;
   };
@@ -2151,18 +2161,23 @@ export default function App() {
 
   // Escape discards an in-progress Angle Step edit and restores the last applied value.
   const handleCancelAngleStepDraft = (id) => {
-    setSequences(rows => rows.map(row => row.id === id ? { ...row, draftAngleStepInput: row.angleStepInput, validationError: null } : row));
+    setSequences(rows => rows.map(row => row.id === id ? { ...row, draftAngleStepInput: row.angleStepInput, validationError: null, validationErrorSource: null } : row));
   };
 
   // Same draft/apply contract as applyAngleDrafts, for the Angle Step field.
   const applyAngleStepDraft = (id) => {
     const row = sequences.find(r => r.id === id);
     if (!row) return true;
-    if (row.draftAngleStepInput === row.angleStepInput) return true;
+    // See applyAngleDrafts' identical comment: matching the committed value
+    // means nothing NEW to commit, but a stale Step error from an earlier
+    // rejected draft (since retyped back to the last-valid text) still needs
+    // to be cleared here, not left showing. Gated to this field's own
+    // 'step'-tagged errors so an unrelated Angle/Sequence error is untouched.
+    if (row.draftAngleStepInput === row.angleStepInput && !(row.validationError && row.validationErrorSource === 'step')) return true;
     const parsed = parseAngleStep(row.draftAngleStepInput);
     if (!parsed.valid) {
       const message = `Angle Step "${row.draftAngleStepInput}" is not valid.\n${parsed.error}`;
-      setSequences(rows => rows.map(r => r.id === id ? { ...r, validationError: message } : r));
+      setSequences(rows => rows.map(r => r.id === id ? { ...r, validationError: message, validationErrorSource: 'step' } : r));
       setErrorModal({
         title: 'Invalid Angle Step',
         sections: [
@@ -2173,7 +2188,7 @@ export default function App() {
       });
       return false;
     }
-    setSequences(rows => rows.map(r => r.id === id ? { ...r, angleStepInput: r.draftAngleStepInput, validationError: null } : r));
+    setSequences(rows => rows.map(r => r.id === id ? { ...r, angleStepInput: r.draftAngleStepInput, validationError: null, validationErrorSource: null } : r));
     return true;
   };
 
@@ -2262,11 +2277,16 @@ export default function App() {
   const handleApplySequenceDraft = (id) => {
     const row = sequences.find(r => r.id === id);
     if (!row) return true;
-    if (row.draftSequenceText === row.sequenceText) return true;
+    // See applyAngleDrafts' identical comment: matching the committed text
+    // means nothing NEW to commit, but a stale Sequence error from an
+    // earlier rejected draft (since retyped back to the last-valid text)
+    // still needs to be cleared here. Gated to this field's own
+    // 'sequence'-tagged errors so an unrelated Angle/Step error is untouched.
+    if (row.draftSequenceText === row.sequenceText && !(row.validationError && row.validationErrorSource === 'sequence')) return true;
     const parsed = parseSequenceDraftText(row.draftSequenceText);
     if (!parsed.valid) {
       const flat = parsed.sections.map(s => `${s.heading}:\n${s.text || (s.list || []).map(item => `• ${item}`).join('\n')}`).join('\n\n');
-      setSequences(rows => rows.map(r => r.id === id ? { ...r, validationError: flat } : r));
+      setSequences(rows => rows.map(r => r.id === id ? { ...r, validationError: flat, validationErrorSource: 'sequence' } : r));
       setErrorModal({ title: parsed.title, sections: parsed.sections, focusId: id });
       return false;
     }
@@ -2284,20 +2304,20 @@ export default function App() {
       if (!check.allowed) {
         const sections = buildVertexLineTestErrorSections(check.violations);
         const flat = sections.map(s => `${s.heading}:\n${s.text}`).join('\n\n');
-        setSequences(rows => rows.map(r => r.id === id ? { ...r, validationError: flat } : r));
+        setSequences(rows => rows.map(r => r.id === id ? { ...r, validationError: flat, validationErrorSource: 'sequence' } : r));
         setErrorModal({ title: 'Vertex Line Test is invalid.', sections, focusId: id });
         return false;
       }
     }
 
-    setSequences(rows => rows.map(r => r.id === id ? { ...r, sequenceText: r.draftSequenceText, validationError: null } : r));
+    setSequences(rows => rows.map(r => r.id === id ? { ...r, sequenceText: r.draftSequenceText, validationError: null, validationErrorSource: null } : r));
     if (id === activeSequenceId) resetShotConstraintReference();
     return true;
   };
 
   // Escape discards the in-progress edit and restores the last applied text.
   const handleCancelSequenceDraft = (id) => {
-    setSequences(rows => rows.map(row => row.id === id ? { ...row, draftSequenceText: row.sequenceText, validationError: null } : row));
+    setSequences(rows => rows.map(row => row.id === id ? { ...row, draftSequenceText: row.sequenceText, validationError: null, validationErrorSource: null } : row));
   };
 
   // Native color inputs always yield a valid #rrggbb value, but the guard

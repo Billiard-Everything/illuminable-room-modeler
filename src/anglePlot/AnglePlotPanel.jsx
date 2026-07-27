@@ -40,6 +40,16 @@ const POINT_HIT_RADIUS_PX = 7;
 // as "the same spot" for one combined hover, once the nearest point under
 // the cursor is found (see findPointsNearScreenPosition's doc comment).
 const HOVER_MERGE_RADIUS_PX = 4;
+// Estimated on-screen footprint of the always-on coordinate tooltip (see
+// hoverCoord below), used only to keep it fully inside the plot's own
+// bounds near an edge/corner — not an exact measurement, just wide/tall
+// enough for "A = 90.000°" / "B = 90.000°" at the largest realistic
+// precision without the box needing to reflow.
+const COORD_TOOLTIP_WIDTH_PX = 116;
+const COORD_TOOLTIP_HEIGHT_PX = 46;
+// Offset from the cursor's exact tip so the tooltip sits beside/above it
+// instead of directly under the pointer, where it would block the cursor.
+const COORD_TOOLTIP_OFFSET_PX = 14;
 // Individual-point marker radius used in POINTS mode (see pickRenderMode
 // below) — the "normal" size at that zoom level. DENSE and OCCUPANCY modes
 // compute their own, smaller marker size instead (see the draw effect):
@@ -616,8 +626,10 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ series, currentPoint
     // Coordinates under the cursor, computed from the current zoom/pan
     // transform (toDataA/toDataB), so this always reflects the exact graph
     // location regardless of zoom level or pan position — and works over
-    // the whole graph area, not just near a plotted point.
-    setHoverCoord({ a: toDataA(screenX), b: toDataB(screenY) });
+    // the whole graph area, not just near a plotted point. screenX/screenY
+    // (the raw cursor position) are kept alongside so the tooltip can be
+    // anchored right next to the cursor, not just to the data point.
+    setHoverCoord({ a: toDataA(screenX), b: toDataB(screenY), screenX, screenY });
     if (isDragging) {
       const dx = (e.clientX - dragStart.current.x) / zoom;
       const dy = (e.clientY - dragStart.current.y) / zoom;
@@ -651,6 +663,17 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ series, currentPoint
   const tooltipMatches = pinnedMatches.length > 0 ? pinnedMatches : hoverMatches;
   const tooltipAnchor = tooltipMatches[0];
 
+  // Cursor-following coordinate tooltip position: offset up-and-right of
+  // the cursor by default so it never sits under (and never blocks) the
+  // pointer itself, clamped so it stays fully inside the plot's own bounds
+  // even right at an edge/corner instead of spilling outside the graph.
+  const coordTooltipLeft = hoverCoord
+    ? Math.min(Math.max(hoverCoord.screenX + COORD_TOOLTIP_OFFSET_PX, 4), size.width - COORD_TOOLTIP_WIDTH_PX - 4)
+    : 0;
+  const coordTooltipTop = hoverCoord
+    ? Math.min(Math.max(hoverCoord.screenY - COORD_TOOLTIP_HEIGHT_PX - COORD_TOOLTIP_OFFSET_PX, 4), size.height - COORD_TOOLTIP_HEIGHT_PX - 4)
+    : 0;
+
   return (
     <div className="flex flex-col h-full w-full min-h-0 min-w-0">
       <div className="flex-1 min-h-0 min-w-0 flex">
@@ -673,14 +696,24 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ series, currentPoint
               No visible graphs — enable a sequence to plot it here
             </div>
           )}
-          {/* Always-on coordinate readout: reflects the exact graph location
+          {/* Always-on coordinate tooltip: reflects the exact graph location
               under the cursor anywhere in the plot (not just near a plotted
-              point), respecting the current zoom/pan transform. Deliberately
-              a separate, fixed-corner element from the nearest-point tooltip
-              below so the two never fight over the same screen space. */}
+              point), respecting the current zoom/pan transform, and follows
+              the cursor rather than sitting in a fixed corner. Light
+              background + dark text regardless of app theme, since this
+              plot's own canvas is always a plain white box (see the
+              CANVAS_PALETTE comment above) — a dark tooltip here would be
+              hard to read against it. Positioned beside/above the cursor
+              (never under it) and clamped to the plot's own bounds near an
+              edge — a separate element from the nearest-point tooltip below,
+              so the two never fight over the same screen space. */}
           {hoverCoord && (
-            <div className="pointer-events-none absolute left-2 bottom-2 bg-[#101820]/90 border border-white/10 rounded-md px-2 py-1 text-[11px] font-mono text-slate-300 shadow-[0_4px_16px_rgba(0,0,0,0.28)]">
-              A = {formatAngleDegrees(hoverCoord.a, displayScale)}&deg; · B = {formatAngleDegrees(hoverCoord.b, displayScale)}&deg;
+            <div
+              className="pointer-events-none absolute bg-white/95 border border-slate-300 rounded-md px-2 py-1 text-[11px] font-mono font-semibold text-slate-800 shadow-[0_4px_16px_rgba(0,0,0,0.28)] leading-tight"
+              style={{ left: coordTooltipLeft, top: coordTooltipTop }}
+            >
+              <div>A = {formatAngleDegrees(hoverCoord.a, displayScale)}&deg;</div>
+              <div>B = {formatAngleDegrees(hoverCoord.b, displayScale)}&deg;</div>
             </div>
           )}
           {tooltipAnchor && (
