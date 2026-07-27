@@ -210,13 +210,18 @@ const pickRenderMode = (projectedSpacingPx) => {
 // AnglePlotWindow. `gridStepDegrees` (per series) picks that series' own
 // level-of-detail draw mode; it is never used to decide what to generate
 // (that's AnglePlotWindow's job).
-const AnglePlotPanel = forwardRef(function AnglePlotPanel({ series, currentPoint, isLocked, onViewChange }, ref) {
+const AnglePlotPanel = forwardRef(function AnglePlotPanel({ series, currentPoint, isLocked, onViewChange, initialZoom, initialPan }, ref) {
   const palette = CANVAS_PALETTE;
   const containerRef = useRef(null);
   const canvasRef = useRef(null);
   const [size, setSize] = useState({ width: 600, height: 420 });
-  const [zoom, setZoom] = useState(DEFAULT_ZOOM);
-  const [pan, setPan] = useState(DEFAULT_PAN);
+  // initialZoom/initialPan let a caller restore a previously saved view
+  // (see AnglePlotWindow.jsx's own initialPanelZoom/initialPanelPan props,
+  // threaded from App.jsx's workspace restore) — read once, exactly like
+  // DEFAULT_ZOOM/DEFAULT_PAN already were, so a caller that never passes
+  // them keeps today's exact default-view behavior.
+  const [zoom, setZoom] = useState(() => initialZoom ?? DEFAULT_ZOOM);
+  const [pan, setPan] = useState(() => initialPan ?? DEFAULT_PAN);
   const [isDragging, setIsDragging] = useState(false);
   const dragStart = useRef({ x: 0, y: 0 });
   const [hoverMatches, setHoverMatches] = useState([]);
@@ -336,6 +341,11 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ series, currentPoint
       bounds: { minA: toDataA(0), maxA: toDataA(size.width), minB: toDataB(size.height), maxB: toDataB(0) },
       zoomLevel: zoom / DEFAULT_ZOOM,
       viewportSize: { width: size.width, height: size.height },
+      // Raw zoom/pan, for callers that want to restore this exact view
+      // later (see AnglePlotWindow.jsx's workspace-persistence reporting)
+      // rather than recompute it from zoomLevel/bounds.
+      zoom,
+      pan,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zoom, pan.a, pan.b, size.width, size.height]);

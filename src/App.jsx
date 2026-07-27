@@ -9,11 +9,15 @@ import GraphSetupWindow from './sequences/GraphSetupWindow.jsx';
 // The multi-sequence row list (Desmos-style "+ Add Sequence") is a plain
 // data model shared between the sidebar row list and the graph pop-up, so
 // both stay in sync on id/label/color assignment without duplicating logic.
-import { createSequenceRow, relabelSequenceRows, isValidHexColor, parseSequenceDraftText } from './sequences/sequenceGraphConfig.js';
+import { createSequenceRow, relabelSequenceRows, isValidHexColor, parseSequenceDraftText, colorForSequenceNumber } from './sequences/sequenceGraphConfig.js';
 // Per-row Angle Step validation/mode reuses the exact same parser the graph
 // itself uses, so a row's "Exact"/"Adaptive" badge never disagrees with
 // what AnglePlotWindow actually does with that same text.
 import { parseAngleStep } from './anglePlot/angleStep.js';
+// WorkspaceManager is the only module allowed to touch browser storage for
+// workspace persistence — every save/load in this file goes through it
+// (see src/workspace/workspaceManager.js for the full design).
+import { saveWorkspace, loadWorkspace } from './workspace/workspaceManager.js';
 
 // =============================================================================
 // App.jsx architecture note
@@ -123,6 +127,13 @@ const DEFAULT_ANGLE_STEP_CONTROL_INCREMENT = 0.0001;
 
 // Numeric readouts default to twelve decimal places for precise endpoint/angle inspection.
 const DEFAULT_DISPLAY_DECIMALS = 12;
+
+// How long to wait, after the workspace last changed, before autosaving it
+// (see buildWorkspaceSnapshot/scheduleAutosave) — long enough that rapid
+// changes (typing, dragging, a burst of edits) collapse into one write
+// instead of one per keystroke/frame, short enough that closing the tab
+// shortly after the last change still saves it.
+const WORKSPACE_AUTOSAVE_DEBOUNCE_MS = 800;
 
 // JavaScript numbers carry about fifteen reliable decimal digits, so the UI clamps there.
 const MAX_DISPLAY_DECIMALS = 15;
@@ -1498,32 +1509,77 @@ const findStableRegion = ({ angleParams, labelsMap, billiardsCode, currentCodeDa
   return { status: 'found', intervals, step: bestBounds.step, visits, capped };
 };
 
+// Restoring a saved workspace (see App()'s own restoredWorkspace) never
+// restores mid-edit state: every row's draft fields are reset to match its
+// applied fields exactly (as if freshly committed) and any validationError
+// is cleared, so a reload never shows a stale "invalid" indicator or a
+// half-typed draft the user never actually submitted. Defensive against a
+// saved row missing a field entirely (an older/partial save, or a
+// hand-edited localStorage value) by falling back to the same blank
+// defaults createSequenceRow itself uses. Returns null (not an empty
+// array) for anything that isn't a non-empty array, so callers can use
+// `??` to fall back to the normal single-default-row startup state.
+const normalizeRestoredSequences = (rawSequences) => {
+  if (!Array.isArray(rawSequences) || rawSequences.length === 0) return null;
+  return rawSequences.map((row, index) => {
+    const sequenceText = typeof row?.sequenceText === 'string' ? row.sequenceText : '';
+    const angleStepInput = typeof row?.angleStepInput === 'string' ? row.angleStepInput : '0.1';
+    const angleA = row?.angleA ?? '';
+    const angleB = row?.angleB ?? '';
+    return {
+      id: row?.id || `seq-${index + 1}`,
+      label: row?.label || `Graph ${index + 1}`,
+      sequenceText,
+      draftSequenceText: sequenceText,
+      angleStepInput,
+      draftAngleStepInput: angleStepInput,
+      angleA,
+      angleB,
+      draftAngleA: angleA,
+      draftAngleB: angleB,
+      color: isValidHexColor(row?.color) ? row.color : colorForSequenceNumber(index + 1),
+      visible: typeof row?.visible === 'boolean' ? row.visible : true,
+      validationError: null,
+      validationErrorSource: null,
+    };
+  });
+};
 
 // ==========================================
 // MAIN APPLICATION COMPONENT
 // ==========================================
 
 export default function App() {
+  // --- WORKSPACE RESTORE ---
+  // Loaded exactly once (useState's initializer runs only on the very first
+  // render — see WorkspaceManager's own doc comment on why this is safe
+  // even under StrictMode's double-invoke). null when there is nothing
+  // saved yet (first visit, storage disabled, or a corrupt payload —
+  // WorkspaceManager itself collapses all of those to null), in which case
+  // every piece of state below falls back to exactly the default it always
+  // had. Every `restoredWorkspace?.x ?? default` below is this feature's
+  // entire "restore" half; the "save" half is buildWorkspaceSnapshot/the
+  // autosave effect, further down.
+  const [restoredWorkspace] = useState(() => loadWorkspace());
+
   // --- APP STATE VARIABLES ---
-  // Light mode is the default; a saved dark preference is honored after the user chooses it.
-  const [theme, setTheme] = useState(() => (
-    window.localStorage.getItem('unfolder-theme') === 'dark' ? 'dark' : 'light'
-  ));
+  // Light mode is the default; a saved theme choice is honored after the user picks one.
+  const [theme, setTheme] = useState(() => (restoredWorkspace?.theme === 'dark' ? 'dark' : 'light'));
   // A boolean keeps toggle rendering readable.
   const isDarkTheme = theme === 'dark';
   // SVG presentation attributes need direct palette values.
   const themePalette = THEME_PALETTES[theme];
   // Hides the whole left sidebar to give the canvas full width. A floating
   // button takes its place when hidden, so it's always reachable again.
-  const [isSidebarVisible, setIsSidebarVisible] = useState(true);
+  const [isSidebarVisible, setIsSidebarVisible] = useState(() => restoredWorkspace?.isSidebarVisible ?? true);
   // Two modes share the same viewer: geometric ray tracing and code unfolding.
-  const [simulatorMode, setSimulatorMode] = useState('code'); 
+  const [simulatorMode, setSimulatorMode] = useState(() => restoredWorkspace?.simulatorMode ?? 'code');
   // The base triangle can be entered as coordinates or as two angles plus length.
-  const [baseInputMode, setBaseInputMode] = useState('angles'); 
+  const [baseInputMode, setBaseInputMode] = useState(() => restoredWorkspace?.baseInputMode ?? 'angles');
   // Base length is the only piece of the old "angleParams" that is still
   // genuinely shared across every row — Angle A/B now live per-row (see
   // `sequences` below) so each row can have its own main-canvas point.
-  const [baseTriangleLength, setBaseTriangleLength] = useState(10);
+  const [baseTriangleLength, setBaseTriangleLength] = useState(() => restoredWorkspace?.baseTriangleLength ?? 10);
   // Increment for the Angle A/B number-stepper arrows, and the default
   // Angle Step given to newly-added sequences. No longer user-editable (the
   // visible "A/B Spinner" control was removed as confusing); fixed at its
@@ -1534,37 +1590,49 @@ export default function App() {
   // shared value/behavior as the old top-level "Step Increment" field, just
   // relocated next to each card's own Angle Step instead of living at the
   // top of the sidebar.
-  const [angleStepControlIncrementInput, setAngleStepControlIncrementInput] = useState(String(DEFAULT_ANGLE_STEP_CONTROL_INCREMENT));
+  const [angleStepControlIncrementInput, setAngleStepControlIncrementInput] = useState(() => restoredWorkspace?.angleStepControlIncrementInput ?? String(DEFAULT_ANGLE_STEP_CONTROL_INCREMENT));
   // Coordinate defaults create a right-ish triangle for immediate manual testing.
-  const [baseCoordsInput, setBaseCoordsInput] = useState([
-    { x: 0, y: 0 },
-    { x: 5, y: 0 },
-    { x: 5, y: 5 } 
-  ]);
-  
+  const [baseCoordsInput, setBaseCoordsInput] = useState(() => (
+    Array.isArray(restoredWorkspace?.baseCoordsInput) && restoredWorkspace.baseCoordsInput.length === 3
+      ? restoredWorkspace.baseCoordsInput
+      : [{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 5, y: 5 }]
+  ));
+
   // --- RAY SIMULATOR SPECIFIC STATE ---
   // Physical vertex index used as the origin in direct ray mode.
-  const [rayStartVertex, setRayStartVertex] = useState(0); 
+  const [rayStartVertex, setRayStartVertex] = useState(() => restoredWorkspace?.rayStartVertex ?? 0);
   // Ray-mode angle is stored in degrees because that is what the UI exposes.
-  const [rayAngle, setRayAngle] = useState(60); 
+  const [rayAngle, setRayAngle] = useState(() => restoredWorkspace?.rayAngle ?? 60);
   // Ray-mode bounce limit prevents accidental infinite or huge unfoldings.
-  const [maxBounces, setMaxBounces] = useState(15); 
-  
+  const [maxBounces, setMaxBounces] = useState(() => restoredWorkspace?.maxBounces ?? 15);
+
   // --- CODE UNFOLDER SPECIFIC STATE ---
   // Desmos-style sequence list: each row is one independent bounce-code
   // unfolding (its own text, Angle Step, color, visibility). The row that
   // was previously the app's only sequence becomes "Graph 1" here so no
   // existing work is lost when this feature is introduced. A ref (not
   // state) tracks the next creation number so labels/colors stay stable
-  // and never renumber when an earlier row is deleted.
-  const nextSequenceNumberRef = useRef(2);
-  const [sequences, setSequences] = useState(() => [
-    createSequenceRow({ number: 1, sequenceText: "3 1 7 2 6 2 8 2 4 2", angleStepInput: String(DEFAULT_ANGLE_INCREMENT), angleA: 15, angleB: 50 })
-  ]);
+  // and never renumber when an earlier row is deleted. initialSequences is
+  // its own (lazy, one-time) state purely so both nextSequenceNumberRef and
+  // `sequences` below can read the exact same resolved array without
+  // normalizing the restored data twice.
+  const [initialSequences] = useState(() => (
+    normalizeRestoredSequences(restoredWorkspace?.sequences)
+    ?? [createSequenceRow({ number: 1, sequenceText: "3 1 7 2 6 2 8 2 4 2", angleStepInput: String(DEFAULT_ANGLE_INCREMENT), angleA: 15, angleB: 50 })]
+  ));
+  const nextSequenceNumberRef = useRef(Math.max(restoredWorkspace?.nextSequenceNumber ?? 2, initialSequences.length + 1));
+  const [sequences, setSequences] = useState(initialSequences);
   // The active row drives the main unfolding canvas, the Angle A/B guarded
   // edits, and the Constrained/Ghost/Search tools below — exactly what
   // `billiardsCode` alone used to drive before this row list existed.
-  const [activeSequenceId, setActiveSequenceId] = useState('seq-1');
+  // Falls back to the first restored row if the saved active id doesn't
+  // match any restored row (e.g. that row was since deleted in a save this
+  // version of the app no longer recognizes).
+  const [activeSequenceId, setActiveSequenceId] = useState(() => (
+    initialSequences.some((row) => row.id === restoredWorkspace?.activeSequenceId)
+      ? restoredWorkspace.activeSequenceId
+      : initialSequences[0].id
+  ));
   const activeSequence = sequences.find(s => s.id === activeSequenceId) || sequences[0];
   // `angleParams` is now derived, not stored: Angle A/B come from whichever
   // row is active (so the main canvas always reflects that row's own
@@ -1584,9 +1652,9 @@ export default function App() {
   // sequence is active" exactly as it did against the old single value.
   const billiardsCode = activeSequence?.sequenceText ?? '';
   // Constrained rejects invalid guarded edits; Ghost allows invalid inspection.
-  const [shotEditMode, setShotEditMode] = useState(SHOT_MODE_LOCKED);
+  const [shotEditMode, setShotEditMode] = useState(() => (restoredWorkspace?.shotEditMode === SHOT_MODE_PREVIEW ? SHOT_MODE_PREVIEW : SHOT_MODE_LOCKED));
   // Epsilon is stored as text so scientific notation remains editable.
-  const [clearanceEpsilonInput, setClearanceEpsilonInput] = useState(String(DEFAULT_CLEARANCE_EPSILON));
+  const [clearanceEpsilonInput, setClearanceEpsilonInput] = useState(() => restoredWorkspace?.clearanceEpsilonInput ?? String(DEFAULT_CLEARANCE_EPSILON));
   // A rejected locked edit reports what was blocked without changing geometry.
   const [lockedShotNotice, setLockedShotNotice] = useState(null);
   // Plain-English pop-up for a rejected sequence/angle apply: { title, message, focusId }.
@@ -1614,11 +1682,19 @@ export default function App() {
   // Ghost mode compares edits against the constrained path captured when Ghost starts.
   const [shotPathReference, setShotPathReference] = useState(null);
   // Persistent labels are useful for debugging dense unfolded fans.
-  const [showAllLabels, setShowAllLabels] = useState(false);
+  const [showAllLabels, setShowAllLabels] = useState(() => restoredWorkspace?.showAllLabels ?? false);
   // Display decimals are editable text so the field can be cleared/retyped without fighting React.
-  const [displayPrecisionInput, setDisplayPrecisionInput] = useState(String(DEFAULT_DISPLAY_DECIMALS));
+  const [displayPrecisionInput, setDisplayPrecisionInput] = useState(() => restoredWorkspace?.displayPrecisionInput ?? String(DEFAULT_DISPLAY_DECIMALS));
   // Controls whether the "Valid Angle A-B Region" pop-up is mounted.
-  const [isAnglePlotOpen, setIsAnglePlotOpen] = useState(false);
+  const [isAnglePlotOpen, setIsAnglePlotOpen] = useState(() => restoredWorkspace?.isAnglePlotOpen ?? false);
+  // This window's own position/size/minimize/maximize/view-lock state, plus
+  // the shared panel's zoom/pan — a ref (not state) since App.jsx never
+  // needs to re-render when these change; it only needs the latest values
+  // on hand when building a workspace snapshot to save, and to pass down as
+  // AnglePlotWindow's initial* props the one time it (re)mounts. Restored
+  // once from the saved workspace; kept current via AnglePlotWindow's own
+  // onWorkspaceStateChange callback (see its render call below).
+  const anglePlotWindowStateRef = useRef(restoredWorkspace?.anglePlotWindow ?? null);
   // Graph Setup is an optional multi-row editor; it shares the existing row
   // model and never replaces the sidebar's established active-row workflow.
   const [isGraphSetupOpen, setIsGraphSetupOpen] = useState(false);
@@ -1645,13 +1721,13 @@ export default function App() {
   // SVG size mirrors the measured container and drives viewport math.
   const [svgSize, setSvgSize] = useState({ width: 800, height: 600 }); 
   // Pan stores the mathematical coordinate at the center of the canvas.
-  const [pan, setPan] = useState({ x: 5, y: 4 }); 
+  const [pan, setPan] = useState(() => restoredWorkspace?.pan ?? { x: 5, y: 4 });
   // Zoom stores pixels per mathematical unit.
-  const [zoom, setZoom] = useState(35);
+  const [zoom, setZoom] = useState(() => restoredWorkspace?.zoom ?? 35);
   // When locked, trackpad/mouse-wheel gestures no longer change zoom (avoids accidental large jumps).
-  const [isZoomLocked, setIsZoomLocked] = useState(false);
+  const [isZoomLocked, setIsZoomLocked] = useState(() => restoredWorkspace?.isZoomLocked ?? false);
   // User-entered multiplier applied when the manual zoom button is clicked.
-  const [zoomMagnification, setZoomMagnification] = useState('2');
+  const [zoomMagnification, setZoomMagnification] = useState(() => restoredWorkspace?.zoomMagnification ?? '2');
 
   // Drag state controls panning and cursor feedback.
   const [isDragging, setIsDragging] = useState(false); 
@@ -1660,11 +1736,86 @@ export default function App() {
   // Screen-space mouse position drives hover labels.
   const [mousePos, setMousePos] = useState({ x: -1000, y: -1000 }); 
 
-  // Persist the user's explicit theme choice and expose it for browser color-scheme defaults.
+  // Expose the theme choice for browser color-scheme defaults. Persisting
+  // the choice itself is the autosave effect's job now (see
+  // buildWorkspaceSnapshot/scheduleAutosave below) — WorkspaceManager is
+  // the only module allowed to touch storage directly, so this no longer
+  // writes localStorage on its own the way it used to.
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
-    window.localStorage.setItem('unfolder-theme', theme);
   }, [theme]);
+
+  // --- WORKSPACE AUTOSAVE ---
+  // Assembles the full, plain, JSON-serializable snapshot WorkspaceManager
+  // persists. Deliberately excludes anything transient/derived rather than
+  // trying to save "everything": open modals (errorModal, isGraphSetupOpen),
+  // drag/hover state, in-flight search results, and per-row plot status are
+  // either meaningless after a reload or get naturally rebuilt once the
+  // restored graphs replot — restoring them would either do nothing useful
+  // or restore a stuck-looking transient UI state. `sequences` is saved
+  // as-is (including its draft fields) since normalizeRestoredSequences
+  // resets those to match the applied fields on the way back in regardless,
+  // so there's nothing to gain by stripping them here.
+  const buildWorkspaceSnapshot = () => ({
+    theme,
+    isSidebarVisible,
+    simulatorMode,
+    baseInputMode,
+    baseTriangleLength,
+    angleStepControlIncrementInput,
+    baseCoordsInput,
+    rayStartVertex,
+    rayAngle,
+    maxBounces,
+    sequences,
+    nextSequenceNumber: nextSequenceNumberRef.current,
+    activeSequenceId,
+    shotEditMode,
+    clearanceEpsilonInput,
+    showAllLabels,
+    displayPrecisionInput,
+    isAnglePlotOpen,
+    pan,
+    zoom,
+    isZoomLocked,
+    zoomMagnification,
+    anglePlotWindow: anglePlotWindowStateRef.current,
+  });
+
+  // Debounced so a burst of changes (typing, dragging, a rapid series of
+  // edits) collapses into one write instead of one per keystroke/frame —
+  // "the user should never need to press Save", but also should never
+  // cause excessive storage writes either. Recreated every render (cheap: a
+  // few field reads and a closure) rather than memoized, since the whole
+  // point is to always capture the *current* render's state when the
+  // debounce timer actually fires; only the timer handle itself needs to
+  // persist across renders, which is what the ref is for.
+  const workspaceSaveTimeoutRef = useRef(null);
+  const scheduleAutosave = () => {
+    if (workspaceSaveTimeoutRef.current) clearTimeout(workspaceSaveTimeoutRef.current);
+    workspaceSaveTimeoutRef.current = setTimeout(() => {
+      workspaceSaveTimeoutRef.current = null;
+      saveWorkspace(buildWorkspaceSnapshot());
+    }, WORKSPACE_AUTOSAVE_DEBOUNCE_MS);
+  };
+  useEffect(() => () => {
+    if (workspaceSaveTimeoutRef.current) clearTimeout(workspaceSaveTimeoutRef.current);
+  }, []);
+
+  // Autosave trigger: every piece of state buildWorkspaceSnapshot reads
+  // (other than anglePlotWindowStateRef, which is a ref and reports its own
+  // changes via AnglePlotWindow's onWorkspaceStateChange callback instead —
+  // see its render call below) is listed here, so any actual workspace
+  // change schedules a save.
+  useEffect(() => {
+    scheduleAutosave();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    theme, isSidebarVisible, simulatorMode, baseInputMode, baseTriangleLength,
+    angleStepControlIncrementInput, baseCoordsInput, rayStartVertex, rayAngle, maxBounces,
+    sequences, activeSequenceId, shotEditMode, clearanceEpsilonInput, showAllLabels,
+    displayPrecisionInput, isAnglePlotOpen, pan, zoom, isZoomLocked, zoomMagnification,
+  ]);
 
   // Mount/Resize observer. A plain `window` "resize" listener only fires
   // when the browser viewport itself changes size — it never fires when
@@ -3665,6 +3816,15 @@ export default function App() {
           onEditGraphs={() => setIsGraphSetupOpen(true)}
           onRowStatusChange={(id, info) => setPlotStatusById(prev => ({ ...prev, [id]: info }))}
           forceGenerateRequest={forceGenerateRequest}
+          initialPos={restoredWorkspace?.anglePlotWindow?.pos}
+          initialSize={restoredWorkspace?.anglePlotWindow?.size}
+          initialIsMinimized={restoredWorkspace?.anglePlotWindow?.isMinimized}
+          initialIsMaximized={restoredWorkspace?.anglePlotWindow?.isMaximized}
+          initialIsViewLocked={restoredWorkspace?.anglePlotWindow?.isViewLocked}
+          initialLegendCollapsed={restoredWorkspace?.anglePlotWindow?.legendCollapsed}
+          initialPanelZoom={restoredWorkspace?.anglePlotWindow?.panelZoom}
+          initialPanelPan={restoredWorkspace?.anglePlotWindow?.panelPan}
+          onWorkspaceStateChange={(state) => { anglePlotWindowStateRef.current = state; scheduleAutosave(); }}
         />
       )}
 
