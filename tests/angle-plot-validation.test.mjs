@@ -63,7 +63,7 @@ test('validateCandidate receives the exact angle values and the supplied base le
 
 test('isValidAnglePair accepts a caller-supplied epsilon smaller than the default', () => {
   // Fine grid steps (e.g. 0.0000003) are smaller than ANGLE_EPSILON_DEGREES,
-  // so generateAngleRegion passes a tighter epsilon; two points exactly one
+  // so the region generator passes a tighter epsilon; two points exactly one
   // such tiny step apart must still be treated as A < B.
   // Sum stays safely under 90 regardless of epsilon, so this isolates the
   // A < B comparison from the separate sum-limit comparison.

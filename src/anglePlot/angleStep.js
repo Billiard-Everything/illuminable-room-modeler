@@ -16,41 +16,13 @@
 // `number` for the digits themselves) and represents it as a JS BigInt
 // count of "step units" at a given decimal `scale` — e.g. step "0.0000003"
 // has scale 7 and is stored as the exact integer 3n (3 * 10^-7). Grid
-// generation (see generateAngleRegion.js) then walks A and B as BigInt
-// multiples of that unit, so stepping is exact integer addition no matter
+// generation (see visibleAnglePointGenerator.js) then walks A and B as
+// BigInt multiples of that unit, so stepping is exact integer addition no matter
 // how small the step is or how many iterations run. Values are converted
 // to floating-point `number`s only once per generated point, at the point
 // they're handed to the rest of the app's (inherently double-based)
 // trig/validation code — a single, non-accumulating conversion, not a
 // repeated one.
-
-// Upper bound on how many candidate pairs generateAngleRegion is allowed to
-// test before the caller must explicitly confirm it wants to proceed. Kept
-// as one named constant so it is easy to find and retune later.
-export const MAX_ANGLE_GRID_ITERATIONS = 2_000_000;
-
-// Angle Steps at or above this use exact brute-force generation (every real
-// grid point, full domain, cached until the step/constraints actually
-// change); steps below it use adaptive visible-region sampling. Expressed
-// as scale/stepUnits (0.1 = scale 1, stepUnits 1n) so the comparison below
-// can use exact BigInt cross-multiplication instead of comparing floating
-// point degree values, which would risk a step typed as "0.1" comparing
-// unequal to the binary-float 0.1 the naive `>= 0.1` check would use.
-export const EXACT_MODE_STEP_THRESHOLD = { scale: 1, stepUnits: 1n };
-
-/**
- * True when the given Angle Step (scale/stepUnits from parseAngleStep) is
- * at or above EXACT_MODE_STEP_THRESHOLD (0.1), using exact BigInt
- * cross-multiplication rather than a binary-float `>=` comparison:
- * stepUnits/10^scale >= thresholdUnits/10^thresholdScale
- *   <=>  stepUnits * 10^thresholdScale >= thresholdUnits * 10^scale
- */
-export const isExactModeStep = (scale, stepUnits) => {
-  const { scale: thresholdScale, stepUnits: thresholdUnits } = EXACT_MODE_STEP_THRESHOLD;
-  const left = stepUnits * (10n ** BigInt(thresholdScale));
-  const right = thresholdUnits * (10n ** BigInt(scale));
-  return left >= right;
-};
 
 const PLAIN_DECIMAL_PATTERN = /^\d+(\.\d+)?$/;
 
@@ -93,10 +65,9 @@ export const parseAngleStep = (rawInput) => {
 /**
  * Narrows the full 0 < A < B, A+B <= 90 domain down to an optional viewport
  * rectangle (plain floating degrees, e.g. from the plot panel's current
- * pan/zoom), expressed as exact BigInt step-unit bounds. Shared by the
- * pre-flight iteration estimate and generateAngleRegion.js so a "scope to
- * current view" sweep and its progress/safety-check estimate never disagree
- * about what range is actually being walked.
+ * pan/zoom), expressed as exact BigInt step-unit bounds. Used by
+ * visibleAnglePointGenerator.js so a "scope to current view" sweep always
+ * walks exactly the range it reports.
  *
  * Viewport bounds only need to be *approximately* respected (they come from
  * screen pixels, not a value the user typed), so they are snapped outward
@@ -138,35 +109,6 @@ export const computeSweepRange = (scale, stepUnits, viewBounds) => {
   }
 
   return { limitUnits, startAUnits, endAUnits, minBUnits, maxBUnitsCap };
-};
-
-/**
- * Estimates how many candidate (A, B) pairs a sweep would test at the given
- * step (optionally narrowed to `viewBounds` — see computeSweepRange), close
- * enough to serve as a pre-flight size check (see MAX_ANGLE_GRID_ITERATIONS)
- * and a progress-bar denominator.
- */
-export const estimateAngleGridIterations = (scale, stepUnits, viewBounds) => {
-  if (stepUnits <= 0n) return 0n;
-  const { limitUnits, startAUnits, endAUnits, minBUnits, maxBUnitsCap } = computeSweepRange(scale, stepUnits, viewBounds);
-  if (endAUnits < startAUnits) return 0n;
-
-  const bSpanUnitsAt = (aUnits) => {
-    const domainBMax = limitUnits - aUnits;
-    const bMax = maxBUnitsCap !== null && maxBUnitsCap < domainBMax ? maxBUnitsCap : domainBMax;
-    const bMinCandidate = aUnits + stepUnits;
-    const bMin = minBUnits !== null && minBUnits > bMinCandidate ? minBUnits : bMinCandidate;
-    return bMax > bMin ? (bMax - bMin) / stepUnits : 0n;
-  };
-
-  const stepsInA = (endAUnits - startAUnits) / stepUnits + 1n;
-  // Trapezoidal estimate across A: exact when the per-A B-span is linear in
-  // A (the unbounded case), a good approximation when a viewport rectangle
-  // clips it into a piecewise-linear shape. This only feeds a progress bar
-  // and a safety-check threshold, so it does not need to be exact.
-  const midAUnits = startAUnits + ((endAUnits - startAUnits) / 2n);
-  const avgBSpan = (bSpanUnitsAt(startAUnits) + 2n * bSpanUnitsAt(midAUnits) + bSpanUnitsAt(endAUnits)) / 4n;
-  return stepsInA * avgBSpan;
 };
 
 /** Decimal places needed to show every digit of the given step without rounding it away. */

@@ -13,7 +13,7 @@ import { createSequenceRow, relabelSequenceRows, isValidHexColor, parseSequenceD
 // Per-row Angle Step validation/mode reuses the exact same parser the graph
 // itself uses, so a row's "Exact"/"Adaptive" badge never disagrees with
 // what AnglePlotWindow actually does with that same text.
-import { parseAngleStep, isExactModeStep } from './anglePlot/angleStep.js';
+import { parseAngleStep } from './anglePlot/angleStep.js';
 
 // =============================================================================
 // App.jsx architecture note
@@ -1214,6 +1214,41 @@ const buildPoolshotTowerValidation = ({ simulatorMode, baseTriangle, activeTrian
   };
 };
 
+// Turns one buildPoolshotTowerValidation violation into a specific,
+// human-readable WHY + HOW explanation — the Vertex Line Test's own spec
+// explicitly rules out a generic "Invalid input" message, so every distinct
+// failure reason recognized by that validator gets its own explanation here.
+const describeVertexLineViolation = (violation) => {
+  switch (violation.expected) {
+    case 'blue y > line y':
+      return 'This is a blue vertex, so it must sit strictly above the shot line — it currently sits on or below it.\nHow to fix: adjust the code sequence, Angle A/B, or base triangle so this vertex moves above the shot line.';
+    case 'black y < line y':
+      return 'This is a black vertex, so it must sit strictly below the shot line — it currently sits on or above it.\nHow to fix: adjust the code sequence, Angle A/B, or base triangle so this vertex moves below the shot line.';
+    case 'formal blue/black tower color':
+      return 'This vertex never received a formal blue/black role from the reflection sequence, so it cannot be validated against the shot line.\nHow to fix: check the code sequence for a reflection step that produces an inconsistent tower coloring.';
+    case 'nonzero shot vector':
+      return 'The shot’s start and end points coincide, so no shot line exists to test vertices against.\nHow to fix: change the code sequence so the final unfolded position differs from the starting vertex.';
+    case 'nonvertical shot line for y-at-x test':
+      return 'The shot line is perfectly vertical, which this test cannot evaluate as a function of x.\nHow to fix: adjust Angle A/B or the code sequence so the shot is not perfectly vertical.';
+    default:
+      if (violation.expected?.startsWith('tower role')) {
+        return `This vertex has a contradictory reflection-tower role (${violation.expected}).\nHow to fix: check the code sequence for a reflection step that assigns this vertex two different colors.`;
+      }
+      return `This vertex failed the requirement "${violation.expected}".\nHow to fix: adjust the code sequence, Angle A/B, or base triangle so it is satisfied.`;
+  }
+};
+
+/** Builds the "Vertex Line Test is invalid." error modal's sections from every collected violation (bounded, matches buildPoolshotTowerValidation's own 12-violation cap). */
+const buildVertexLineTestErrorSections = (violations) => {
+  if (!violations || violations.length === 0) {
+    return [{ heading: 'Problem', text: 'The Vertex Line Test failed for an unspecified reason.' }];
+  }
+  return violations.slice(0, 12).map((violation) => ({
+    heading: `${violation.triId} ${violation.vertexName}${violation.symbol ? ` (${violation.symbol})` : ''}`,
+    text: describeVertexLineViolation(violation),
+  }));
+};
+
 /** Compares two physical-to-symbol maps for exact current-mapping preservation. */
 const haveSameLabelMap = (left, right) => {
   // All three physical vertices must retain their symbolic labels.
@@ -1844,6 +1879,32 @@ export default function App() {
     return { allowed: true };
   };
 
+  // Guards the active row's own sequence-code edits the same way
+  // validateLockedAngleCandidate guards its angle edits: in Constrained mode,
+  // a new code must still pass the direct blue/black Vertex Line Test against
+  // the *current* base triangle/angles before it is ever committed, so an
+  // invalid shot is never rendered even for a moment. Ghost mode is left
+  // alone (its whole purpose is exploring otherwise-invalid geometry), and a
+  // path-consistency check against the old code makes no sense here (the
+  // code itself is what's changing), so this only runs the direct line test.
+  const validateLockedCodeCandidate = (candidateSequenceText) => {
+    if (shotEditMode !== SHOT_MODE_LOCKED) return { allowed: true };
+    if (simulatorMode !== 'code') return { allowed: true };
+    if (baseInputMode !== 'angles') return { allowed: true };
+    if (!candidateSequenceText.trim()) return { allowed: true };
+
+    const candidateCodeData = unfoldCodeData(candidateSequenceText, baseTriangle, true);
+    const candidateValidation = buildPoolshotTowerValidation({
+      simulatorMode: 'code', baseTriangle, activeTriangles: candidateCodeData.triangles,
+      labelsMap: candidateCodeData.idxToAngle, reflectionEdges: candidateCodeData.reflectionEdges,
+      parsedSequence: candidateCodeData.parsedSequence, clearanceEpsilon,
+    });
+    if (candidateValidation.status === 'invalid') {
+      return { allowed: false, violations: candidateValidation.violations };
+    }
+    return { allowed: true };
+  };
+
   // Per-sequence-row equivalent of validateLockedAngleCandidate above, used
   // by the multi-sequence graph pop-up to test an arbitrary (A, B) pair
   // against *any* row's sequence text. Since Angle A/B are now per-row (not
@@ -1978,7 +2039,7 @@ export default function App() {
   // so a simultaneous problem with both A and B reports both instead of
   // stopping at the first. This intentionally does NOT attempt to compute
   // the tighter, sequence-specific sub-range (that region has no closed
-  // form — it's whatever generateAngleRegion.js's sweep finds — so
+  // form — it's whatever the adaptive region sweep finds — so
   // reporting it as a single min/max pair would just be wrong); the deeper
   // sequence-specific check still runs separately once the pair passes
   // these geometric bounds, exactly as it always did.
@@ -2209,6 +2270,26 @@ export default function App() {
       setErrorModal({ title: parsed.title, sections: parsed.sections, focusId: id });
       return false;
     }
+
+    // Only the active row's code ever reaches the main canvas (billiardsCode
+    // is derived from it — see its own definition), so only that row's edits
+    // need the Vertex Line Test gate: committing must never let the main
+    // canvas render, even briefly, a shot that fails it. Other rows' code
+    // only feeds the "Valid Angle A-B Region" graph, which already validates
+    // every candidate it plots before ever drawing a point (see
+    // buildValidateCandidateForSequence) — nothing there is ever "partially
+    // plotted" either.
+    if (id === activeSequenceId) {
+      const check = validateLockedCodeCandidate(row.draftSequenceText);
+      if (!check.allowed) {
+        const sections = buildVertexLineTestErrorSections(check.violations);
+        const flat = sections.map(s => `${s.heading}:\n${s.text}`).join('\n\n');
+        setSequences(rows => rows.map(r => r.id === id ? { ...r, validationError: flat } : r));
+        setErrorModal({ title: 'Vertex Line Test is invalid.', sections, focusId: id });
+        return false;
+      }
+    }
+
     setSequences(rows => rows.map(r => r.id === id ? { ...r, sequenceText: r.draftSequenceText, validationError: null } : r));
     if (id === activeSequenceId) resetShotConstraintReference();
     return true;
@@ -2599,7 +2680,6 @@ export default function App() {
                 {sequences.map(row => {
                   const isActive = row.id === activeSequenceId;
                   const parsedStep = parseAngleStep(row.angleStepInput);
-                  const modeLabel = parsedStep.valid ? (isExactModeStep(parsedStep.scale, parsedStep.stepUnits) ? 'Exact' : 'Adaptive') : null;
                   // A sequence code is meaningless without a base triangle,
                   // so typing is blocked entirely until this row's own
                   // Angle A and B are both set — see the sequence input below.
@@ -2742,7 +2822,7 @@ export default function App() {
                             }}
                             onBlur={() => applyAngleStepDraft(row.id)}
                             onClick={e => e.stopPropagation()}
-                            title={`${modeLabel ?? ''} sampling. Press Enter to apply, Escape to discard the edit.`}
+                            title="Press Enter to apply, Escape to discard the edit."
                             aria-label={`${row.label} Angle Step`}
                             className="w-full min-w-0 bg-[#080b0f] border border-white/10 rounded px-1.5 py-1 text-xs font-mono text-slate-100 outline-none placeholder:text-slate-600 focus:border-cyan-300/50"
                           />

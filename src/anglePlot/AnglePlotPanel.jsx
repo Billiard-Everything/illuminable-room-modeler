@@ -210,6 +210,10 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ series, currentPoint
   const dragStart = useRef({ x: 0, y: 0 });
   const [hoverMatches, setHoverMatches] = useState([]);
   const [pinnedMatches, setPinnedMatches] = useState([]);
+  // Raw cursor position in graph coordinates, updated on every mousemove
+  // anywhere in the plot (not just near a plotted point) — see the
+  // always-on coordinate readout in the JSX below.
+  const [hoverCoord, setHoverCoord] = useState(null);
 
   // Track the container's actual pixel size so the canvas drawing buffer
   // (not just its CSS box) stays sharp after the window is resized.
@@ -590,21 +594,54 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ series, currentPoint
     dragStart.current = { x: e.clientX, y: e.clientY };
   };
 
+  // The nearest-point hit-test (findMatchesAt) is an O(n) scan over every
+  // plotted point across every series — up to MAX_VISIBLE_RENDER_POINTS of
+  // them (renderSamplingPolicy.js). Raw mousemove events can fire far more
+  // often than the display actually refreshes, so that scan is coalesced to
+  // once per animation frame here: multiple mousemove events between two
+  // paints only ever run it once, with the latest cursor position. Reading
+  // the cursor's data-space coordinate (toDataA/toDataB below) is plain O(1)
+  // arithmetic, so it is never throttled — it stays exactly as smooth as the
+  // mouse itself.
+  const hoverRafRef = useRef(null);
+  const pendingHoverRef = useRef(null);
+  useEffect(() => () => {
+    if (hoverRafRef.current !== null) cancelAnimationFrame(hoverRafRef.current);
+  }, []);
+
   const handleMouseMove = (e) => {
     const rect = containerRef.current.getBoundingClientRect();
     const screenX = e.clientX - rect.left;
     const screenY = e.clientY - rect.top;
+    // Coordinates under the cursor, computed from the current zoom/pan
+    // transform (toDataA/toDataB), so this always reflects the exact graph
+    // location regardless of zoom level or pan position — and works over
+    // the whole graph area, not just near a plotted point.
+    setHoverCoord({ a: toDataA(screenX), b: toDataB(screenY) });
     if (isDragging) {
       const dx = (e.clientX - dragStart.current.x) / zoom;
       const dy = (e.clientY - dragStart.current.y) / zoom;
       setPan((prev) => clampPanToDomain({ a: prev.a - dx, b: prev.b + dy }, zoom, size.width, size.height));
       dragStart.current = { x: e.clientX, y: e.clientY };
-    } else {
-      setHoverMatches(findMatchesAt(screenX, screenY));
+      return;
+    }
+    pendingHoverRef.current = { screenX, screenY };
+    if (hoverRafRef.current === null) {
+      hoverRafRef.current = requestAnimationFrame(() => {
+        hoverRafRef.current = null;
+        const pending = pendingHoverRef.current;
+        if (pending) setHoverMatches(findMatchesAt(pending.screenX, pending.screenY));
+      });
     }
   };
 
   const handleMouseUp = () => setIsDragging(false);
+
+  const handleMouseLeave = () => {
+    setIsDragging(false);
+    setHoverCoord(null);
+    setHoverMatches([]);
+  };
 
   const handleClick = (e) => {
     const rect = containerRef.current.getBoundingClientRect();
@@ -623,17 +660,27 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ series, currentPoint
             Angle B (degrees)
           </span>
         </div>
-        <div ref={containerRef} className="relative flex-1 min-w-0 min-h-0 border border-white/10 rounded-md overflow-hidden" style={{ cursor: isLocked ? 'not-allowed' : isDragging ? 'grabbing' : 'grab' }}
+        <div ref={containerRef} className="relative flex-1 min-w-0 min-h-0 border border-white/10 rounded-md overflow-hidden" style={{ cursor: isLocked ? 'not-allowed' : isDragging ? 'grabbing' : 'default' }}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
-          onMouseLeave={handleMouseUp}
+          onMouseLeave={handleMouseLeave}
           onClick={handleClick}
         >
           <canvas ref={canvasRef} className="block" />
           {series.length === 0 && (
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-[11px] font-bold uppercase tracking-wider text-slate-600">
               No visible graphs — enable a sequence to plot it here
+            </div>
+          )}
+          {/* Always-on coordinate readout: reflects the exact graph location
+              under the cursor anywhere in the plot (not just near a plotted
+              point), respecting the current zoom/pan transform. Deliberately
+              a separate, fixed-corner element from the nearest-point tooltip
+              below so the two never fight over the same screen space. */}
+          {hoverCoord && (
+            <div className="pointer-events-none absolute left-2 bottom-2 bg-[#101820]/90 border border-white/10 rounded-md px-2 py-1 text-[11px] font-mono text-slate-300 shadow-[0_4px_16px_rgba(0,0,0,0.28)]">
+              A = {formatAngleDegrees(hoverCoord.a, displayScale)}&deg; · B = {formatAngleDegrees(hoverCoord.b, displayScale)}&deg;
             </div>
           )}
           {tooltipAnchor && (
@@ -656,7 +703,7 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ series, currentPoint
                     <div>B = {formatAngleDegrees(match.b, sourceSeries?.displayScale || displayScale)}&deg;</div>
                     <div className="text-slate-400">A+B = {formatAngleDegrees(match.a + match.b, sourceSeries?.displayScale || displayScale)}&deg;</div>
                     {sourceSeries && (
-                      <div className="text-slate-500">Step {sourceSeries.angleStepInput}&deg; · {sourceSeries.mode === 'exact' ? 'Exact' : sourceSeries.mode === 'adaptive' ? 'Adaptive' : '—'}</div>
+                      <div className="text-slate-500">Step {sourceSeries.angleStepInput}&deg;</div>
                     )}
                   </div>
                 );

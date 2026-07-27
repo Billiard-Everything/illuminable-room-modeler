@@ -14,12 +14,9 @@
 //   calculateSamplingStride), so a coarser render step never departs from
 //   the user's real grid — it only samples that grid less densely.
 //
-// Exact vs. adaptive mode
-// -------------------------
-// This module only governs adaptive mode (Angle Step < EXACT_MODE_STEP_
-// THRESHOLD, see angleStep.js). At or above that threshold, AnglePlotWindow
-// uses generateAngleRegion.js's exact full-domain sweep instead — this
-// module and visibleAnglePointGenerator.js are not involved at all.
+// Every Angle Step, however coarse or fine, renders through this adaptive
+// policy and visibleAnglePointGenerator.js — there is no separate
+// full-domain "exact" sweep mode.
 //
 // Zoom level definition
 // ----------------------

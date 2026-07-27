@@ -1,5 +1,5 @@
 import { Eye, EyeOff, Plus, ScatterChart, Trash2, X } from 'lucide-react';
-import { isExactModeStep, parseAngleStep } from '../anglePlot/angleStep.js';
+import { parseAngleStep } from '../anglePlot/angleStep.js';
 
 // GraphSetupWindow is an additive editor for the existing sequence rows. It
 // deliberately owns no graph or geometry state: every field delegates to the
@@ -109,9 +109,6 @@ export default function GraphSetupWindow({
               const isActive = row.id === activeSequenceId;
               const anglesIncomplete = row.angleA === '' || row.angleB === '';
               const parsedStep = parseAngleStep(row.angleStepInput);
-              const modeLabel = parsedStep.valid
-                ? (isExactModeStep(parsedStep.scale, parsedStep.stepUnits) ? 'Exact' : 'Adaptive')
-                : 'Invalid step';
 
               return (
                 <article
@@ -216,9 +213,9 @@ export default function GraphSetupWindow({
                       />
                     </label>
                   </div>
-                  <div className={`mt-1 text-[10px] ${parsedStep.valid ? 'text-slate-500' : 'text-red-300'}`}>
-                    {parsedStep.valid ? `${modeLabel} sampling` : parsedStep.error}
-                  </div>
+                  {!parsedStep.valid && (
+                    <div className="mt-1 text-[10px] text-red-300">{parsedStep.error}</div>
+                  )}
 
                   <label className="mt-3 block">
                     <span className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-slate-500">Sequence Code</span>
