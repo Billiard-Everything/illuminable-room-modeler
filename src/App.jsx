@@ -13,7 +13,7 @@ import { createSequenceRow, relabelSequenceRows, isValidHexColor, parseSequenceD
 // Per-row Angle Step validation/mode reuses the exact same parser the graph
 // itself uses, so a row's "Exact"/"Adaptive" badge never disagrees with
 // what AnglePlotWindow actually does with that same text.
-import { parseAngleStep, isExactModeStep } from './anglePlot/angleStep.js';
+import { parseAngleStep } from './anglePlot/angleStep.js';
 
 // =============================================================================
 // App.jsx architecture note
@@ -1214,6 +1214,71 @@ const buildPoolshotTowerValidation = ({ simulatorMode, baseTriangle, activeTrian
   };
 };
 
+// Maps a buildPoolshotTowerValidation `expected` reason to a short section
+// heading and a one-line phrase — the Vertex Line Test's own spec rules out
+// a generic "Invalid input" message, so every distinct failure reason still
+// gets a specific explanation, but grouped by reason (see
+// buildVertexLineTestErrorSections below) instead of one paragraph per
+// vertex: a real failure often fails 10+ vertices for the exact same root
+// cause, and repeating the same explanation 10+ times is unreadable.
+const VERTEX_LINE_TEST_CATEGORY = {
+  'blue y > line y': { heading: 'Blue vertices on the wrong side', phrase: 'must sit above the shot line' },
+  'black y < line y': { heading: 'Black vertices on the wrong side', phrase: 'must sit below the shot line' },
+  'formal blue/black tower color': { heading: 'Uncolored vertices', phrase: 'never received a formal blue/black role' },
+  'nonzero shot vector': { heading: 'Degenerate shot', phrase: 'the shot has zero length, so no line exists to test against' },
+  'nonvertical shot line for y-at-x test': { heading: 'Vertical shot line', phrase: 'this test cannot evaluate a perfectly vertical shot line' },
+};
+const categorizeVertexLineViolation = (expected) => {
+  if (VERTEX_LINE_TEST_CATEGORY[expected]) return VERTEX_LINE_TEST_CATEGORY[expected];
+  if (expected?.startsWith('tower role')) return { heading: 'Conflicting tower roles', phrase: `have a contradictory role (${expected})` };
+  return { heading: 'Other requirement', phrase: `failed "${expected}"` };
+};
+
+// Caps how many individual vertex names are spelled out per group before
+// collapsing the rest into "and N more" — keeps each line short even when
+// many vertices share the same failure.
+const MAX_VERTEX_NAMES_SHOWN = 4;
+const formatVertexLabelList = (labels) => (
+  labels.length <= MAX_VERTEX_NAMES_SHOWN
+    ? labels.join(', ')
+    : `${labels.slice(0, MAX_VERTEX_NAMES_SHOWN).join(', ')}, and ${labels.length - MAX_VERTEX_NAMES_SHOWN} more`
+);
+
+/**
+ * Builds the "Vertex Line Test is invalid." error modal's sections: one
+ * short line per distinct failure reason (grouping every vertex that fails
+ * for that same reason), plus one shared "How to fix" line — never one
+ * block per vertex, so a systemic mismatch that fails many vertices still
+ * reads as a couple of lines instead of a wall of repeated text.
+ */
+const buildVertexLineTestErrorSections = (violations, clearanceEpsilon) => {
+  if (!violations || violations.length === 0) {
+    return [{ heading: 'Problem', text: 'The Vertex Line Test failed for an unspecified reason.' }];
+  }
+  const groups = new Map();
+  for (const violation of violations) {
+    const label = `${violation.triId} ${violation.vertexName}${violation.symbol ? ` (${violation.symbol})` : ''}`;
+    if (!groups.has(violation.expected)) groups.set(violation.expected, []);
+    groups.get(violation.expected).push(label);
+  }
+  const sections = [];
+  for (const [expected, labels] of groups) {
+    const { heading, phrase } = categorizeVertexLineViolation(expected);
+    sections.push({ heading, text: `${formatVertexLabelList(labels)} ${phrase}.` });
+  }
+  // Surfaces the current Separation Epsilon: this test's pass/fail line sits
+  // exactly `clearanceEpsilon` away from the shot line (getLineYTolerance),
+  // so the same code+angles can pass at a small epsilon and fail at a
+  // larger one — a real, working tolerance, not a bug, but invisible
+  // without this since Separation Epsilon lives in a different part of the
+  // sidebar than this modal.
+  const epsilonNote = Number.isFinite(clearanceEpsilon)
+    ? ` (current Separation Epsilon: ${clearanceEpsilon})`
+    : '';
+  sections.push({ heading: 'How to fix', text: `Adjust the code sequence, Angle A/B, or base triangle so every vertex ends up on its required side of the shot line${epsilonNote}.` });
+  return sections;
+};
+
 /** Compares two physical-to-symbol maps for exact current-mapping preservation. */
 const haveSameLabelMap = (left, right) => {
   // All three physical vertices must retain their symbolic labels.
@@ -1529,6 +1594,21 @@ export default function App() {
   // Sequence-text <input> elements by row id, so the error modal can return
   // focus to the exact row that was rejected once it's dismissed.
   const sequenceInputRefsRef = useRef({});
+  // The graph-card list's own scroll container, so a newly added card can
+  // be scrolled into view automatically instead of requiring a manual
+  // scroll to find it below the existing cards.
+  const sequenceListRef = useRef(null);
+  const prevSequenceCountRef = useRef(0);
+  useEffect(() => {
+    // Only scroll when a graph was actually *added* (the count grew) — new
+    // rows are always appended at the end, so scrolling this container to
+    // its bottom reveals the new one. Never fires on delete/edit, since
+    // the count either shrinks or stays the same for those.
+    if (sequences.length > prevSequenceCountRef.current && sequenceListRef.current) {
+      sequenceListRef.current.scrollTop = sequenceListRef.current.scrollHeight;
+    }
+    prevSequenceCountRef.current = sequences.length;
+  }, [sequences.length]);
   // The latest stable-region search result is shown until inputs change.
   const [stableRegionResult, setStableRegionResult] = useState(null);
   // Ghost mode compares edits against the constrained path captured when Ghost starts.
@@ -1554,6 +1634,10 @@ export default function App() {
   // *only* that row to (re)generate now, independent of whichever row is
   // active and without touching any other row's already-plotted geometry.
   const [forceGenerateRequest, setForceGenerateRequest] = useState(null);
+  // A plain incrementing counter (not Date.now()) so token generation stays
+  // a pure, synchronous ref mutation rather than calling an impure API from
+  // code reachable during render.
+  const forceGenerateTokenRef = useRef(0);
 
   // --- VIEWPORT & INTERACTION STATE ---
   // Ref to the canvas container lets us measure available SVG pixels.
@@ -1825,6 +1909,43 @@ export default function App() {
     return { allowed: true };
   };
 
+  // Guards the active row's own sequence-code edits the same way
+  // validateLockedAngleCandidate guards its angle edits: in Constrained mode,
+  // a new code must still pass the direct blue/black Vertex Line Test against
+  // the *current* base triangle/angles before it is ever committed, so an
+  // invalid shot is never rendered even for a moment. Ghost mode is left
+  // alone (its whole purpose is exploring otherwise-invalid geometry), and a
+  // path-consistency check against the old code makes no sense here (the
+  // code itself is what's changing), so this only runs the direct line test.
+  //
+  // `candidateAngleParams` defaults to the memoized `angleParams` (the
+  // active row's already-committed angles) but callers that just committed
+  // a fresh Angle A/B draft in the *same* handler must pass those draft
+  // values explicitly instead: `setSequences` queues a state update rather
+  // than applying it synchronously, so `angleParams` (derived from
+  // `activeSequence`, itself read from the `sequences` state variable)
+  // would still reflect the pre-commit angles until the next render — using
+  // it here would validate the new code against the wrong triangle.
+  const validateLockedCodeCandidate = (candidateSequenceText, candidateAngleParams = angleParams) => {
+    if (shotEditMode !== SHOT_MODE_LOCKED) return { allowed: true };
+    if (simulatorMode !== 'code') return { allowed: true };
+    if (baseInputMode !== 'angles') return { allowed: true };
+    if (!candidateSequenceText.trim()) return { allowed: true };
+    if (!hasCompleteAngleParams(candidateAngleParams) || !hasValidAngleTriangle(candidateAngleParams)) return { allowed: true };
+
+    const candidateBaseTriangle = buildBaseTriangle('angles', baseCoordsInput, candidateAngleParams);
+    const candidateCodeData = unfoldCodeData(candidateSequenceText, candidateBaseTriangle, true);
+    const candidateValidation = buildPoolshotTowerValidation({
+      simulatorMode: 'code', baseTriangle: candidateBaseTriangle, activeTriangles: candidateCodeData.triangles,
+      labelsMap: candidateCodeData.idxToAngle, reflectionEdges: candidateCodeData.reflectionEdges,
+      parsedSequence: candidateCodeData.parsedSequence, clearanceEpsilon,
+    });
+    if (candidateValidation.status === 'invalid') {
+      return { allowed: false, violations: candidateValidation.violations };
+    }
+    return { allowed: true };
+  };
+
   // Per-sequence-row equivalent of validateLockedAngleCandidate above, used
   // by the multi-sequence graph pop-up to test an arbitrary (A, B) pair
   // against *any* row's sequence text. Since Angle A/B are now per-row (not
@@ -1922,7 +2043,7 @@ export default function App() {
     } else {
       // Angle A/B belong to the active row only; every other row is untouched.
       const rowField = field === 'a' ? 'angleA' : 'angleB';
-      setSequences(rows => rows.map(row => row.id === activeSequenceId ? { ...row, [rowField]: value, validationError: null } : row));
+      setSequences(rows => rows.map(row => row.id === activeSequenceId ? { ...row, [rowField]: value, validationError: null, validationErrorSource: null } : row));
     }
   };
 
@@ -1935,42 +2056,208 @@ export default function App() {
     setAnglePlotRequestId(id => id + 1);
   };
 
-  // A graph card's own "Plot Valid Angle Region" button: opens the shared
-  // window if needed, makes this row visible (so its new result is actually
-  // seen on the shared canvas), and forces *only* this row to (re)generate —
-  // every other row's already-plotted geometry is untouched.
-  const handlePlotSequenceNow = (id) => {
-    setIsAnglePlotOpen(true);
-    setSequences(rows => rows.map(row => row.id === id ? { ...row, visible: true } : row));
-    setForceGenerateRequest({ id, token: Date.now() });
+  // Error messages always show the typed value rounded to a fixed 3
+  // decimal places matching whatever the user actually typed (14 -> 0
+  // decimals, 14.1 -> 1, 14.06 -> 2, 14.067 -> 3, ...), determined from the
+  // raw typed text rather than a fixed precision, so the error always
+  // reads at the same precision the user is already working in.
+  const countDecimalPlaces = (rawText) => {
+    const text = String(rawText ?? '');
+    const dotIndex = text.indexOf('.');
+    if (dotIndex === -1) return 0;
+    return text.slice(dotIndex + 1).replace(/[^0-9]/g, '').length;
+  };
+  const formatToDecimals = (value, decimals) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n.toFixed(decimals) : String(value ?? '');
   };
 
-  // The Graph Setup dialog can configure a row before it has a valid code or
-  // complete triangle, states that the live Base Geometry guard correctly
-  // rejects. A completed active graph is instead delegated straight back to
-  // that established guard, preserving Constrained/Ghost behavior exactly.
-  const handleGraphSetupAngleChange = (id, field, value) => {
-    const row = sequences.find(sequence => sequence.id === id);
-    if (!row) return;
-    const candidateParams = {
-      a: field === 'a' ? value : row.angleA,
-      b: field === 'b' ? value : row.angleB,
-      length: baseTriangleLength,
-    };
-    const canUseEstablishedGuard = id === activeSequenceId
-      && !!row.sequenceText.trim()
-      && hasCompleteAngleParams(candidateParams);
-    if (canUseEstablishedGuard) {
-      handleAngleParamChange(field, value);
-      return;
+  // Given a candidate (A, B) pair, works out — from the existing geometric
+  // constraints alone (A > 0, B > 0, A < B, A + B <= 90; see
+  // angleValidation.js's isValidAnglePair, which the "Valid Angle A-B
+  // Region" graph already uses) — the closed-form allowed range for
+  // whichever field(s) are out of range, one independent check per field
+  // so a simultaneous problem with both A and B reports both instead of
+  // stopping at the first. This intentionally does NOT attempt to compute
+  // the tighter, sequence-specific sub-range (that region has no closed
+  // form — it's whatever the adaptive region sweep finds — so
+  // reporting it as a single min/max pair would just be wrong); the deeper
+  // sequence-specific check still runs separately once the pair passes
+  // these geometric bounds, exactly as it always did.
+  const computeAngleRangeFailures = (candidateA, candidateB, decimalsA, decimalsB) => {
+    const failures = [];
+    // Clamped at 0 so a wildly out-of-range B (e.g. 466, itself already
+    // reported as its own failure below) can never make this read as a
+    // backwards range like "0 <= Angle A <= -376" — once B is that far off,
+    // no A value works yet either, which a degenerate 0-to-0 range still
+    // communicates correctly without the confusing negative upper bound.
+    const upperForA = Math.max(0, Math.min(candidateB, 90 - candidateB));
+    const aOk = Number.isFinite(candidateA) && candidateA > 0 && candidateA < upperForA;
+    if (!aOk) {
+      failures.push({
+        heading: 'Angle A',
+        text: `Angle A = ${formatToDecimals(candidateA, decimalsA)}°\n\nAllowed range:\n${formatToDecimals(0, decimalsA)}° ≤ Angle A ≤ ${formatToDecimals(upperForA, decimalsA)}°`,
+      });
     }
-    const rowField = field === 'a' ? 'angleA' : 'angleB';
-    setSequences(rows => rows.map(sequence => sequence.id === id
-      ? { ...sequence, [rowField]: value, validationError: null }
-      : sequence));
-    if (id === activeSequenceId) {
-      resetShotConstraintReference();
+    // Same backwards-range guard as upperForA above: an out-of-range A
+    // (e.g. negative, or past 90) must never turn this into "500 <= Angle B
+    // <= -410". Clamped so lowerForB is never negative and upperForB never
+    // ends up below it.
+    const lowerForB = Math.max(0, candidateA);
+    const upperForB = Math.max(lowerForB, 90 - candidateA);
+    const bOk = Number.isFinite(candidateB) && candidateB > candidateA && candidateB <= 90 - candidateA;
+    if (!bOk) {
+      failures.push({
+        heading: 'Angle B',
+        text: `Angle B = ${formatToDecimals(candidateB, decimalsB)}°\n\nAllowed range:\n${formatToDecimals(lowerForB, decimalsB)}° ≤ Angle B ≤ ${formatToDecimals(upperForB, decimalsB)}°`,
+      });
     }
+    return failures;
+  };
+
+  // Draft-only: typing into Angle A/B never validates or recalculates
+  // anything — see applyAngleDrafts below for when it actually does.
+  const handleAngleDraftChange = (id, field, value) => {
+    const draftField = field === 'a' ? 'draftAngleA' : 'draftAngleB';
+    setSequences(rows => rows.map(row => row.id === id ? { ...row, [draftField]: value } : row));
+  };
+
+  // Escape discards in-progress Angle A/B edits and restores the last applied values.
+  const handleCancelAngleDraft = (id) => {
+    setSequences(rows => rows.map(row => row.id === id ? { ...row, draftAngleA: row.angleA, draftAngleB: row.angleB, validationError: null, validationErrorSource: null } : row));
+  };
+
+  // Validates this row's pending Angle A/B draft — as a *pair*, together,
+  // rather than one field at a time, so editing both before applying is
+  // checked against the new combination instead of one field's fresh draft
+  // against the other's stale committed value — and, only if valid,
+  // commits both. An invalid pair is left exactly as typed (the draft is
+  // never silently reverted); the shared error modal lists every failing
+  // field with its own computed allowed range, at that field's own typed
+  // decimal precision. Nothing about the graph or main canvas changes
+  // until this succeeds. Used by each field's own Enter/blur, and by the
+  // "Plot Valid Angle Region" button before it calculates, so both act as
+  // the same trigger.
+  const applyAngleDrafts = (id) => {
+    const row = sequences.find(r => r.id === id);
+    if (!row) return true;
+    const draftA = row.draftAngleA;
+    const draftB = row.draftAngleB;
+    // The draft matching what's already committed means there is nothing
+    // NEW to commit, but it does NOT mean a currently-displayed angle
+    // validationError is still accurate — e.g. the user broke this row's
+    // angles, saw an error, and then retyped the exact value that was
+    // already committed. Falling through in that case re-runs the checks
+    // below against the current (still-committed, still-valid) values,
+    // which is what actually clears the stale error instead of short-
+    // circuiting past it. Gated on validationErrorSource === 'angle' (not
+    // just any validationError) so an unrelated Step or Sequence error
+    // showing at the same time is never touched by this field's own apply.
+    if (draftA === row.angleA && draftB === row.angleB && !(row.validationError && row.validationErrorSource === 'angle')) return true;
+
+    const isActiveRow = id === activeSequenceId;
+    // Ghost mode's whole purpose is inspecting otherwise-invalid geometry
+    // without being blocked — that established behavior is preserved here
+    // exactly as it was for the active row's live edits.
+    const ghostBypass = isActiveRow && shotEditMode !== SHOT_MODE_LOCKED;
+    const bothProvided = draftA !== '' && draftB !== '';
+
+    let failures = [];
+    if (!ghostBypass && bothProvided) {
+      const candidateA = Number(draftA);
+      const candidateB = Number(draftB);
+      const decimalsA = countDecimalPlaces(draftA);
+      const decimalsB = countDecimalPlaces(draftB);
+      failures = computeAngleRangeFailures(candidateA, candidateB, decimalsA, decimalsB);
+      // The deeper blue/black-line check only makes sense once this row
+      // actually has a code to validate against — a brand-new row's code
+      // is itself gated on having angles set first, so skipping this when
+      // there's no code yet (not rejecting with "sequence is empty") is
+      // what breaks that chicken-and-egg deadlock: angles can always be
+      // set on their own geometric merits, and the deep check kicks in
+      // automatically as soon as a code exists to check. It only runs once
+      // the geometric range checks above already pass, since a candidate
+      // outside the simple range has no code-specific triangle to build.
+      if (failures.length === 0 && row.sequenceText.trim()) {
+        const validateCandidate = buildValidateCandidateForSequence(row.sequenceText, { a: row.angleA, b: row.angleB, length: baseTriangleLength });
+        const result = validateCandidate({ a: candidateA, b: candidateB, length: baseTriangleLength });
+        if (!result.allowed) {
+          failures = [{ heading: `Additional requirement for ${row.label}'s sequence`, text: result.reason }];
+        }
+      }
+    }
+
+    if (failures.length > 0) {
+      const sections = [
+        { heading: 'Problem', text: `Angle A and/or Angle B are not valid for ${row.label}.` },
+        ...failures,
+      ];
+      const flat = sections.map(s => `${s.heading}:\n${s.text}`).join('\n\n');
+      setSequences(rows => rows.map(r => r.id === id ? { ...r, validationError: flat, validationErrorSource: 'angle' } : r));
+      setErrorModal({ title: 'Invalid angles', sections, focusId: null });
+      return false;
+    }
+
+    setSequences(rows => rows.map(r => r.id === id ? { ...r, angleA: draftA, angleB: draftB, validationError: null, validationErrorSource: null } : r));
+    if (isActiveRow) resetShotConstraintReference();
+    return true;
+  };
+
+  // Draft-only: typing into Angle Step never validates or recalculates
+  // anything — see applyAngleStepDraft below for when it actually does.
+  const handleAngleStepDraftChange = (id, value) => {
+    setSequences(rows => rows.map(row => row.id === id ? { ...row, draftAngleStepInput: value } : row));
+  };
+
+  // Escape discards an in-progress Angle Step edit and restores the last applied value.
+  const handleCancelAngleStepDraft = (id) => {
+    setSequences(rows => rows.map(row => row.id === id ? { ...row, draftAngleStepInput: row.angleStepInput, validationError: null, validationErrorSource: null } : row));
+  };
+
+  // Same draft/apply contract as applyAngleDrafts, for the Angle Step field.
+  const applyAngleStepDraft = (id) => {
+    const row = sequences.find(r => r.id === id);
+    if (!row) return true;
+    // See applyAngleDrafts' identical comment: matching the committed value
+    // means nothing NEW to commit, but a stale Step error from an earlier
+    // rejected draft (since retyped back to the last-valid text) still needs
+    // to be cleared here, not left showing. Gated to this field's own
+    // 'step'-tagged errors so an unrelated Angle/Sequence error is untouched.
+    if (row.draftAngleStepInput === row.angleStepInput && !(row.validationError && row.validationErrorSource === 'step')) return true;
+    const parsed = parseAngleStep(row.draftAngleStepInput);
+    if (!parsed.valid) {
+      const message = `Angle Step "${row.draftAngleStepInput}" is not valid.\n${parsed.error}`;
+      setSequences(rows => rows.map(r => r.id === id ? { ...r, validationError: message, validationErrorSource: 'step' } : r));
+      setErrorModal({
+        title: 'Invalid Angle Step',
+        sections: [
+          { heading: 'Problem', text: `"${row.draftAngleStepInput}" is not a valid Angle Step for ${row.label}.` },
+          { heading: 'How to fix it', text: parsed.error },
+        ],
+        focusId: null,
+      });
+      return false;
+    }
+    setSequences(rows => rows.map(r => r.id === id ? { ...r, angleStepInput: r.draftAngleStepInput, validationError: null, validationErrorSource: null } : r));
+    return true;
+  };
+
+  // A graph card's own "Plot Valid Angle Region" button: applies any
+  // pending Angle A/B, Angle Step, and sequence code drafts first (the
+  // same validation each field's own Enter triggers — see the functions
+  // above), stopping at the first failure so an invalid value never
+  // silently reaches the calculation. Only once everything applies does it
+  // open the shared window (if needed), make this row visible (so its new
+  // result is actually seen on the shared canvas), and force *only* this
+  // row to (re)generate — every other row's already-plotted geometry is
+  // untouched.
+  const handlePlotSequenceNow = (id) => {
+    if (!applyAngleDrafts(id)) return;
+    if (!applyAngleStepDraft(id)) return;
+    if (!handleApplySequenceDraft(id)) return;
+    setIsAnglePlotOpen(true);
+    setSequences(rows => rows.map(row => row.id === id ? { ...row, visible: true } : row));
+    setForceGenerateRequest({ id, token: ++forceGenerateTokenRef.current });
   };
 
   const handleOpenPlotFromGraphSetup = () => {
@@ -2033,32 +2320,76 @@ export default function App() {
   };
 
   // Validates the row's draft and, only if valid, commits it as the applied
-  // sequence (Enter or blur). An invalid draft is left exactly as typed —
-  // this row's validationError is set (for the "Invalid sequence" row
-  // status) and the shared error modal explains why in plain English; nothing
-  // about the graph or main canvas changes for an invalid apply.
+  // sequence (Enter — see the code field's own onKeyDown; blur no longer
+  // triggers this). An invalid draft is left exactly as typed — this row's
+  // validationError is set (for the "Invalid sequence" row status) and the
+  // shared error modal explains why in plain English; nothing about the
+  // graph or main canvas changes for an invalid apply.
   const handleApplySequenceDraft = (id) => {
     const row = sequences.find(r => r.id === id);
-    if (!row) return;
-    if (row.draftSequenceText === row.sequenceText) return;
+    if (!row) return true;
+    // The code field unlocks as soon as Angle A/B are non-blank DRAFTS (see
+    // anglesIncomplete), which can happen without either angle draft ever
+    // having been applied — pressing Enter here first, before the angle
+    // fields' own Enter. Apply those pending drafts now so they're
+    // committed too, mirroring the same chain handlePlotSequenceNow already
+    // runs. Note this does NOT make row.angleA/angleB reliable for the rest
+    // of this function: setSequences queues an update rather than applying
+    // it synchronously, so `row` (read once above) stays exactly as it was
+    // — the Vertex Line Test check below explicitly passes the just-applied
+    // draft angle values instead of relying on the (still stale-this-render)
+    // angleParams memo.
+    if (!applyAngleDrafts(id) || !applyAngleStepDraft(id)) return false;
+    // See applyAngleDrafts' identical comment: matching the committed text
+    // means nothing NEW to commit, but a stale Sequence error from an
+    // earlier rejected draft (since retyped back to the last-valid text)
+    // still needs to be cleared here. Gated to this field's own
+    // 'sequence'-tagged errors so an unrelated Angle/Step error is untouched.
+    if (row.draftSequenceText === row.sequenceText && !(row.validationError && row.validationErrorSource === 'sequence')) return true;
     const parsed = parseSequenceDraftText(row.draftSequenceText);
     if (!parsed.valid) {
       const flat = parsed.sections.map(s => `${s.heading}:\n${s.text || (s.list || []).map(item => `• ${item}`).join('\n')}`).join('\n\n');
-      setSequences(rows => rows.map(r => r.id === id ? { ...r, validationError: flat } : r));
+      setSequences(rows => rows.map(r => r.id === id ? { ...r, validationError: flat, validationErrorSource: 'sequence' } : r));
       setErrorModal({ title: parsed.title, sections: parsed.sections, focusId: id });
-      return;
+      return false;
     }
-    setSequences(rows => rows.map(r => r.id === id ? { ...r, sequenceText: r.draftSequenceText, validationError: null } : r));
+
+    // Only the active row's code ever reaches the main canvas (billiardsCode
+    // is derived from it — see its own definition), so only that row's edits
+    // need the Vertex Line Test gate: committing must never let the main
+    // canvas render, even briefly, a shot that fails it. Other rows' code
+    // only feeds the "Valid Angle A-B Region" graph, which already validates
+    // every candidate it plots before ever drawing a point (see
+    // buildValidateCandidateForSequence) — nothing there is ever "partially
+    // plotted" either.
+    if (id === activeSequenceId) {
+      // Pass the row's own (just-applied-above) draft angles explicitly —
+      // see validateLockedCodeCandidate's comment on why the angleParams
+      // memo can't be trusted here.
+      const check = validateLockedCodeCandidate(row.draftSequenceText, { a: row.draftAngleA, b: row.draftAngleB, length: baseTriangleLength });
+      if (!check.allowed) {
+        const sections = buildVertexLineTestErrorSections(check.violations, clearanceEpsilon);
+        const flat = sections.map(s => `${s.heading}:\n${s.text}`).join('\n\n');
+        setSequences(rows => rows.map(r => r.id === id ? { ...r, validationError: flat, validationErrorSource: 'sequence' } : r));
+        // focusId intentionally left unset: a Vertex Line Test failure can
+        // be fixed via the code OR the angles, so forcibly refocusing the
+        // code field on close (like a code *syntax* error does) would be a
+        // guess at which one the user actually wants to edit next — and
+        // risks stealing focus back from whichever field they've already
+        // clicked into by the time the close-triggered refocus fires.
+        setErrorModal({ title: 'Vertex Line Test is invalid.', sections, focusId: null });
+        return false;
+      }
+    }
+
+    setSequences(rows => rows.map(r => r.id === id ? { ...r, sequenceText: r.draftSequenceText, validationError: null, validationErrorSource: null } : r));
     if (id === activeSequenceId) resetShotConstraintReference();
+    return true;
   };
 
   // Escape discards the in-progress edit and restores the last applied text.
   const handleCancelSequenceDraft = (id) => {
-    setSequences(rows => rows.map(row => row.id === id ? { ...row, draftSequenceText: row.sequenceText, validationError: null } : row));
-  };
-
-  const handleSequenceAngleStepChange = (id, text) => {
-    setSequences(rows => rows.map(row => row.id === id ? { ...row, angleStepInput: text } : row));
+    setSequences(rows => rows.map(row => row.id === id ? { ...row, draftSequenceText: row.sequenceText, validationError: null, validationErrorSource: null } : row));
   };
 
   // Native color inputs always yield a valid #rrggbb value, but the guard
@@ -2437,15 +2768,22 @@ export default function App() {
                   scrollbar (not the whole sidebar's) so adding many graphs
                   can never push Constrained/Ghost/Search or the rest of the
                   sidebar off screen. */}
-              <div className="space-y-2 max-h-[32rem] overflow-y-auto custom-scrollbar pr-0.5 -mr-0.5">
+              <div ref={sequenceListRef} className="space-y-2 max-h-[32rem] overflow-y-auto custom-scrollbar pr-0.5 -mr-0.5">
                 {sequences.map(row => {
                   const isActive = row.id === activeSequenceId;
                   const parsedStep = parseAngleStep(row.angleStepInput);
-                  const modeLabel = parsedStep.valid ? (isExactModeStep(parsedStep.scale, parsedStep.stepUnits) ? 'Exact' : 'Adaptive') : null;
                   // A sequence code is meaningless without a base triangle,
                   // so typing is blocked entirely until this row's own
-                  // Angle A and B are both set — see the sequence input below.
-                  const anglesIncomplete = row.angleA === '' || row.angleB === '';
+                  // Angle A and B are both set — see the sequence input
+                  // below. Reads the DRAFTS, not the applied values: since
+                  // nothing auto-commits on blur anymore (validation only
+                  // fires on Enter/Plot), gating this on the applied value
+                  // would leave the code field locked forever once you type
+                  // A and B and move on without pressing Enter on either —
+                  // exactly the "my input isn't working" deadlock this
+                  // avoids. Whatever's typed still only actually validates
+                  // at Enter/Plot time, same as every other field.
+                  const anglesIncomplete = row.draftAngleA === '' || row.draftAngleB === '';
                   const plotInfo = plotStatusById[row.id];
                   const isPlotting = plotInfo?.status === 'running';
                   // Status line uses the professor's requested vocabulary
@@ -2465,7 +2803,14 @@ export default function App() {
                     : plotPhase === 'Hidden' ? 'text-slate-600'
                     : plotPhase === 'Not plotted' ? 'text-slate-500'
                     : 'text-red-300';
-                  const canPlotNow = !anglesIncomplete && !!row.sequenceText.trim() && !isPlotting;
+                  // Also reads the sequence DRAFT, not the applied text, for
+                  // the same reason as anglesIncomplete above: a freshly
+                  // typed code that was never separately committed must
+                  // still be able to enable this button, since clicking it
+                  // (handlePlotSequenceNow) is exactly what applies every
+                  // pending draft — angles, step, and code together — before
+                  // plotting.
+                  const canPlotNow = !anglesIncomplete && !!row.draftSequenceText.trim() && !isPlotting;
                   return (
                     <div
                       key={row.id}
@@ -2513,23 +2858,34 @@ export default function App() {
                           <Trash2 className="w-3 h-3" />
                         </button>
                       </div>
-                      {/* Angle A / Angle B: this graph's own values, editable
-                          directly here (not just displayed) — the active
-                          row's edits go through the same Constrained/Ghost
-                          guard the old top-level inputs used; any other
-                          row's edits are guarded independently. */}
+                      {/* Angle A / Angle B: type freely — nothing is
+                          validated or recalculated until Enter or "Plot
+                          Valid Angle Region" (see applyAngleDrafts).
+                          Deliberately NOT on blur: clicking/tabbing to a
+                          different field (or a different graph card
+                          entirely) must never interrupt still-in-progress
+                          editing with a validation error — only an explicit
+                          Enter or Plot ends the edit. An invalid pair is
+                          left exactly as typed; the error explains why via
+                          the shared modal. */}
                       <div className="flex items-center gap-1.5 mt-1.5">
                         <label className="flex items-center gap-1 flex-1 min-w-0">
                           <span className="text-[10px] font-bold text-slate-500 shrink-0">A</span>
                           <input
                             type="number"
                             step={angleInputStep}
-                            value={row.angleA}
+                            value={row.draftAngleA}
                             onFocus={() => handleSelectActiveSequence(row.id)}
-                            onChange={e => { e.stopPropagation(); handleGraphSetupAngleChange(row.id, 'a', e.target.value); }}
+                            onChange={e => { e.stopPropagation(); handleAngleDraftChange(row.id, 'a', e.target.value); }}
+                            onKeyDown={e => {
+                              e.stopPropagation();
+                              if (e.key === 'Enter') { e.preventDefault(); applyAngleDrafts(row.id); }
+                              else if (e.key === 'Escape') { e.preventDefault(); handleCancelAngleDraft(row.id); e.currentTarget.blur(); }
+                            }}
                             onClick={e => e.stopPropagation()}
                             placeholder="e.g. 15"
                             aria-label={`${row.label} Angle A`}
+                            title="Press Enter to apply, Escape to discard the edit."
                             className="w-full min-w-0 bg-[#080b0f] border border-white/10 rounded px-1.5 py-1 text-xs font-mono text-slate-100 outline-none placeholder:text-slate-600 focus:border-cyan-300/50"
                           />
                         </label>
@@ -2538,12 +2894,18 @@ export default function App() {
                           <input
                             type="number"
                             step={angleInputStep}
-                            value={row.angleB}
+                            value={row.draftAngleB}
                             onFocus={() => handleSelectActiveSequence(row.id)}
-                            onChange={e => { e.stopPropagation(); handleGraphSetupAngleChange(row.id, 'b', e.target.value); }}
+                            onChange={e => { e.stopPropagation(); handleAngleDraftChange(row.id, 'b', e.target.value); }}
+                            onKeyDown={e => {
+                              e.stopPropagation();
+                              if (e.key === 'Enter') { e.preventDefault(); applyAngleDrafts(row.id); }
+                              else if (e.key === 'Escape') { e.preventDefault(); handleCancelAngleDraft(row.id); e.currentTarget.blur(); }
+                            }}
                             onClick={e => e.stopPropagation()}
                             placeholder="e.g. 50"
                             aria-label={`${row.label} Angle B`}
+                            title="Press Enter to apply, Escape to discard the edit."
                             className="w-full min-w-0 bg-[#080b0f] border border-white/10 rounded px-1.5 py-1 text-xs font-mono text-slate-100 outline-none placeholder:text-slate-600 focus:border-cyan-300/50"
                           />
                         </label>
@@ -2551,7 +2913,9 @@ export default function App() {
                       {/* Angle Step and Step Increment each get a full half
                           of the card's width (not a third shared with A/B)
                           so a long/precise step value is actually readable
-                          instead of clipped in a cramped box. */}
+                          instead of clipped in a cramped box. Angle Step
+                          follows the same type-freely/apply-on-Enter model
+                          as A/B above. */}
                       <div className="flex items-center gap-1.5 mt-1">
                         <label className="flex items-center gap-1 flex-1 min-w-0">
                           <span className="text-[10px] font-bold text-slate-500 shrink-0">Step</span>
@@ -2559,12 +2923,17 @@ export default function App() {
                             type="number"
                             min="0"
                             step={angleStepControlIncrement}
-                            value={row.angleStepInput}
-                            onChange={e => { e.stopPropagation(); handleSequenceAngleStepChange(row.id, e.target.value); }}
+                            value={row.draftAngleStepInput}
+                            onChange={e => { e.stopPropagation(); handleAngleStepDraftChange(row.id, e.target.value); }}
+                            onKeyDown={e => {
+                              e.stopPropagation();
+                              if (e.key === 'Enter') { e.preventDefault(); applyAngleStepDraft(row.id); }
+                              else if (e.key === 'Escape') { e.preventDefault(); handleCancelAngleStepDraft(row.id); e.currentTarget.blur(); }
+                            }}
                             onClick={e => e.stopPropagation()}
-                            title={parsedStep.valid ? `${modeLabel} sampling` : parsedStep.error}
+                            title="Press Enter to apply, Escape to discard the edit."
                             aria-label={`${row.label} Angle Step`}
-                            className={`w-full min-w-0 bg-[#080b0f] border rounded px-1.5 py-1 text-xs font-mono outline-none placeholder:text-slate-600 focus:border-cyan-300/50 ${parsedStep.valid ? 'border-white/10 text-slate-100' : 'border-red-400/50 text-red-200'}`}
+                            className="w-full min-w-0 bg-[#080b0f] border border-white/10 rounded px-1.5 py-1 text-xs font-mono text-slate-100 outline-none placeholder:text-slate-600 focus:border-cyan-300/50"
                           />
                         </label>
                         <label className="flex items-center gap-1 flex-1 min-w-0">
@@ -2582,15 +2951,6 @@ export default function App() {
                           />
                         </label>
                       </div>
-                      {isActive && lockedShotNotice && !lockedShotNotice.isLengthField && (
-                        <div className="text-[10px] text-amber-100 mt-1.5 font-medium bg-amber-500/10 rounded py-1.5 px-2 border border-amber-300/20 space-y-1">
-                          <div className="font-bold">{lockedShotNotice.field === 'a' ? 'Angle A' : 'Angle B'} of {lockedShotNotice.value} was not applied.</div>
-                          <ul className="list-disc pl-4 space-y-0.5">
-                            {lockedShotNotice.requiredConstraints.map((c, i) => <li key={i}>{c}</li>)}
-                          </ul>
-                          <div><span className="font-bold">How to fix it:</span> {lockedShotNotice.howToFix}</div>
-                        </div>
-                      )}
                       {/* Full-width sequence field on its own line so long
                           codes are actually readable instead of clipped
                           beside other controls. Kept `readOnly` (not
@@ -2624,7 +2984,6 @@ export default function App() {
                           if (e.key === 'Enter') { e.preventDefault(); handleApplySequenceDraft(row.id); }
                           else if (e.key === 'Escape') { e.preventDefault(); handleCancelSequenceDraft(row.id); e.currentTarget.blur(); }
                         }}
-                        onBlur={() => handleApplySequenceDraft(row.id)}
                         placeholder={anglesIncomplete ? 'Enter Angle A/B above first' : 'e.g. 1 5 16 5 1 2 3 6'}
                         aria-label={`${row.label} sequence text`}
                         aria-disabled={anglesIncomplete}
@@ -2639,7 +2998,7 @@ export default function App() {
                         type="button"
                         onClick={e => { e.stopPropagation(); handlePlotSequenceNow(row.id); }}
                         disabled={!canPlotNow}
-                        title={anglesIncomplete ? 'Set Angle A and Angle B first' : !row.sequenceText.trim() ? 'Enter a sequence code first' : `Calculate and plot ${row.label} on the shared Valid Angle A-B Region graph`}
+                        title={anglesIncomplete ? 'Set Angle A and Angle B first' : !row.draftSequenceText.trim() ? 'Enter a sequence code first' : `Calculate and plot ${row.label} on the shared Valid Angle A-B Region graph`}
                         className="mt-1.5 w-full flex items-center justify-center gap-1.5 bg-cyan-500/15 hover:bg-cyan-500/25 disabled:opacity-40 disabled:cursor-not-allowed border border-cyan-300/30 text-cyan-100 px-2.5 py-1 rounded-md text-[10px] font-bold transition-colors"
                       >
                         {isPlotting ? <Loader2 className="w-3 h-3 animate-spin" /> : <ScatterChart className="w-3 h-3" />}
@@ -3320,8 +3679,12 @@ export default function App() {
           onSelect={handleSelectActiveSequence}
           onToggleVisible={handleToggleSequenceVisible}
           onColorChange={handleSequenceColorChange}
-          onAngleChange={handleGraphSetupAngleChange}
-          onAngleStepChange={handleSequenceAngleStepChange}
+          onAngleDraftChange={handleAngleDraftChange}
+          onApplyAngleDraft={applyAngleDrafts}
+          onCancelAngleDraft={handleCancelAngleDraft}
+          onAngleStepDraftChange={handleAngleStepDraftChange}
+          onApplyAngleStepDraft={applyAngleStepDraft}
+          onCancelAngleStepDraft={handleCancelAngleStepDraft}
           angleStepControlIncrement={angleStepControlIncrement}
           stepIncrementInput={angleStepControlIncrementInput}
           onStepIncrementChange={setAngleStepControlIncrementInput}
@@ -3348,12 +3711,15 @@ export default function App() {
             aria-labelledby="sequence-error-title"
             aria-describedby="sequence-error-message"
             onClick={e => e.stopPropagation()}
-            className="w-full max-w-sm bg-[#151c24] border border-red-400/30 rounded-lg shadow-[0_20px_60px_rgba(0,0,0,0.55)] p-4"
+            className="w-full max-w-sm max-h-[85vh] flex flex-col bg-[#151c24] border border-red-400/30 rounded-lg shadow-[0_20px_60px_rgba(0,0,0,0.55)] p-4"
           >
-            <h3 id="sequence-error-title" className="text-sm font-bold text-red-200 mb-3 flex items-center gap-1.5">
+            <h3 id="sequence-error-title" className="text-sm font-bold text-red-200 mb-3 flex items-center gap-1.5 shrink-0">
               <AlertTriangle className="w-4 h-4 shrink-0" /> {errorModal.title}
             </h3>
-            <div id="sequence-error-message" className="text-xs text-slate-300 leading-relaxed mb-4 space-y-3">
+            {/* Scrolls independently of the title/OK button so a long list of
+                sections (e.g. many distinct Vertex Line Test failure
+                categories) can never push the OK button off-screen. */}
+            <div id="sequence-error-message" className="text-xs text-slate-300 leading-relaxed mb-4 space-y-3 overflow-y-auto custom-scrollbar flex-1 min-h-0">
               {errorModal.sections.map((section, i) => (
                 <div key={i}>
                   <div className="text-[10px] uppercase tracking-wider font-bold text-slate-500 mb-0.5">{section.heading}</div>
@@ -3367,17 +3733,7 @@ export default function App() {
                 </div>
               ))}
             </div>
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  const flat = errorModal.sections.map(s => `${s.heading}:\n${s.text || (s.list || []).map(item => `• ${item}`).join('\n')}`).join('\n\n');
-                  navigator.clipboard?.writeText(`${errorModal.title}\n\n${flat}`).catch(() => {});
-                }}
-                className="bg-[#0b1016] hover:bg-[#172230] border border-white/10 text-slate-300 px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-colors"
-              >
-                Copy error details
-              </button>
+            <div className="flex justify-end gap-2 shrink-0">
               <button
                 type="button"
                 autoFocus

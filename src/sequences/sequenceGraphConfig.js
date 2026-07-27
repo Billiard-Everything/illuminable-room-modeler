@@ -50,12 +50,20 @@ export const colorForSequenceNumber = (number) => (
  * every other row's. They default to blank (not a guessed number): a new
  * row has no meaningful angle yet, so the main controls show an "Enter
  * Angle A/B" placeholder instead of a pre-filled value the user didn't
- * choose. `draftSequenceText` is the live-typing buffer shown in the
- * sequence input; `sequenceText` only changes when a draft is successfully
- * applied (Enter/blur), so mid-typing keystrokes never touch the graph or
- * main canvas. `validationError` holds the last apply/edit rejection
- * reason for this row (sequence or angle), cleared on the next successful
- * apply.
+ * choose. `draftSequenceText`/`draftAngleA`/`draftAngleB`/
+ * `draftAngleStepInput` are the live-typing buffers shown in their
+ * respective inputs; the corresponding applied field (`sequenceText`,
+ * `angleA`, `angleB`, `angleStepInput`) only changes once a draft is
+ * successfully applied (Enter, blur, or pressing that graph's "Plot Valid
+ * Angle Region" button), so mid-typing keystrokes never touch the graph or
+ * main canvas, and a value that fails its constraints is never silently
+ * discarded — the draft stays exactly as typed so it can be corrected.
+ * `validationError` holds the last apply rejection reason for this row,
+ * cleared on the next successful apply. `validationErrorSource` tags which
+ * field's apply function currently owns that message ('angle', 'step', or
+ * 'sequence') — each apply function only ever reconsiders or clears an
+ * error tagged as its own, so e.g. blurring a valid Angle A/B field while a
+ * Step error is showing can never blank out that unrelated Step error.
  */
 export const createSequenceRow = ({ number, sequenceText = '', angleStepInput = '0.1', angleA = '', angleB = '' }) => ({
   id: `seq-${number}`,
@@ -63,11 +71,15 @@ export const createSequenceRow = ({ number, sequenceText = '', angleStepInput = 
   sequenceText,
   draftSequenceText: sequenceText,
   angleStepInput,
+  draftAngleStepInput: angleStepInput,
   angleA,
   angleB,
+  draftAngleA: angleA,
+  draftAngleB: angleB,
   color: colorForSequenceNumber(number),
   visible: true,
   validationError: null,
+  validationErrorSource: null,
 });
 
 /**

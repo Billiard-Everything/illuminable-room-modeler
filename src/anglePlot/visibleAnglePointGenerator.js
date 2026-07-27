@@ -1,27 +1,28 @@
-// VisibleAnglePointGenerator: the adaptive, zoom-aware counterpart to
-// generateAngleRegion.js's exact full/bounded sweep, used only when the
-// user's Angle Step is below EXACT_MODE_STEP_THRESHOLD (angleStep.js) — see
-// AnglePlotWindow.jsx for the exact/adaptive mode switch.
+// VisibleAnglePointGenerator: the adaptive, zoom-aware sweep behind the
+// "Valid Angle A-B Region" plot for every row, at every Angle Step — there
+// is no separate full-domain "exact" sweep mode (an earlier version of this
+// feature had one for coarse steps; it was a brute-force enumeration whose
+// cost scaled with the whole 0-90 domain instead of the current viewport,
+// and was measurably slow even at this feature's own default 0.1 step).
 //
-// Where generateAngleRegion.js tests every single point on the user's exact
-// Angle Step grid inside a region, this module walks a *coarser* grid (an
+// This module walks a *coarser* grid than the user's real Angle Step (an
 // exact whole-number stride over that grid — see renderSamplingPolicy.js's
 // calculateSamplingStride) and, for each coarse cell, searches a small,
 // deterministic, capped set of the user's real grid points near that cell's
 // center for one that is actually valid (see findValidPointInCell). This is
-// what keeps "zoom out to look at a 0.0000003-degree Angle Step" from ever
-// requiring billions of validateCandidate calls: the number of *cells*
-// checked is capped (MAX_VISIBLE_SAMPLE_CELLS), and each cell only tests up
-// to MAX_CANDIDATES_PER_CELL real grid points before giving up on that cell.
+// what keeps "zoom out to look at a 0.0000003-degree Angle Step" — or a
+// coarse step across the full domain — from ever requiring billions of
+// validateCandidate calls: the number of *cells* checked is capped
+// (MAX_VISIBLE_SAMPLE_CELLS), and each cell only tests up to
+// MAX_CANDIDATES_PER_CELL real grid points before giving up on that cell.
 //
 // Determinism: the per-cell search order is a fixed expanding Chebyshev
 // ring (center, then ring 1, ring 2, ...), so the same viewport/step/
 // constraints always produce the same rendered points.
 //
 // Validity: every returned point is a real point that passed
-// isValidAnglePair (the same check generateAngleRegion.js uses) on the
-// user's exact grid. The cell-search never invents or interpolates a point
-// — it only decides *where to look* for a real one.
+// isValidAnglePair on the user's exact grid. The cell-search never invents
+// or interpolates a point — it only decides *where to look* for a real one.
 
 import { isValidAnglePair, ANGLE_EPSILON_DEGREES } from './angleValidation.js';
 import { computeSweepRange } from './angleStep.js';

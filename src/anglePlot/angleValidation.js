@@ -4,7 +4,7 @@
 // billiards code parser — the expensive, app-specific validation (does the
 // rest of the program actually accept this pair?) is injected as the
 // `validateCandidate` callback rather than duplicated here. See
-// generateAngleRegion.js for how this is driven across a whole grid (using
+// visibleAnglePointGenerator.js for how this is driven across a whole grid (using
 // an arbitrary decimal step from angleStep.js, not a fixed increment), and
 // App.jsx for how `validateCandidate` is wired to the exact same
 // `validateLockedAngleCandidate` closure the live A/B number inputs use.
@@ -14,7 +14,7 @@
 // incorrectly rejected. This default is sized for ordinary floating-point
 // noise, not for the user's chosen grid step — a step smaller than this
 // (e.g. 0.0000003) would make two genuinely-adjacent grid points look
-// "equal" under this tolerance, so generateAngleRegion.js passes a smaller,
+// "equal" under this tolerance, so visibleAnglePointGenerator.js passes a smaller,
 // step-scaled epsilon instead of relying on this default. See its
 // `epsilon` computation for why.
 export const ANGLE_EPSILON_DEGREES = 1e-6;
@@ -26,7 +26,7 @@ export const ANGLE_EPSILON_DEGREES = 1e-6;
 // becomes "the third angle must be *strictly* obtuse", change ONLY the
 // comparison below from `<=` to `<` (and drop the epsilon on this side of
 // the comparison, since a strict rule should not treat 90 + epsilon as
-// passing). Nothing else in this file or in generateAngleRegion.js needs
+// passing). Nothing else in this file or in visibleAnglePointGenerator.js needs
 // to change.
 export const OBTUSE_THIRD_ANGLE_LIMIT_DEGREES = 90;
 
@@ -50,7 +50,7 @@ export const isWithinObtuseSumLimit = (angleA, angleB, epsilon = ANGLE_EPSILON_D
  * production so step 4 is never skipped for real.
  *
  * `epsilon` defaults to ANGLE_EPSILON_DEGREES but should be overridden by
- * callers stepping a grid finer than that (see generateAngleRegion.js) so
+ * callers stepping a grid finer than that (see visibleAnglePointGenerator.js) so
  * the tolerance never swallows a real, intentional gap between points.
  */
 export const isValidAnglePair = (angleA, angleB, { validateCandidate, baseLength, epsilon = ANGLE_EPSILON_DEGREES } = {}) => {

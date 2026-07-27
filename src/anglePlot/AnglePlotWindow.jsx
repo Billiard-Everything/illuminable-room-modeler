@@ -1,12 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { X, RotateCcw, RefreshCw, Loader2, GripHorizontal, ZoomIn, ZoomOut, Maximize, Maximize2, Minimize2, Lock, Unlock, AlertTriangle, Eye, EyeOff, Minus, Square } from 'lucide-react';
 import AnglePlotPanel from './AnglePlotPanel.jsx';
-import { generateAngleRegion } from './generateAngleRegion.js';
 import { generateVisibleAnglePoints } from './visibleAnglePointGenerator.js';
-import { parseAngleStep, displayScaleForStep, isExactModeStep, estimateAngleGridIterations, MAX_ANGLE_GRID_ITERATIONS } from './angleStep.js';
+import { parseAngleStep, displayScaleForStep } from './angleStep.js';
 import { RENDER_DEBOUNCE_MS } from './renderSamplingPolicy.js';
 import { truncateSequenceText } from '../sequences/sequenceGraphConfig.js';
-import { buildAngleRegionCacheKey, getCachedAngleRegion, setCachedAngleRegion } from './resultCache.js';
 
 // AnglePlotWindow: the pop-up "Valid Angle A-B Region" graph. This project
 // is a browser React app, not a desktop toolkit, so there is no native OS
@@ -27,26 +25,19 @@ import { buildAngleRegionCacheKey, getCachedAngleRegion, setCachedAngleRegion } 
 // serve the same purpose ("stop the view from moving") in two different
 // views.
 //
-// Exact vs. adaptive rendering
-// ------------------------------
-// Two generation strategies, switched automatically per *row* on that
-// row's own Angle Step (see isExactModeStep / EXACT_MODE_STEP_THRESHOLD in
-// angleStep.js) — one visible sequence can render in exact mode while
-// another renders in adaptive mode at the same time:
-//
-// - Exact mode (Angle Step >= 0.1): generateAngleRegion.js's full-domain
-//   exact sweep. Generated once (mount, refresh, or that row's own
-//   sequence/step change) and then reused as-is while the user zooms/pans
-//   — zoom and pan never trigger regeneration for an exact-mode row.
-//   Guarded by the same MAX_ANGLE_GRID_ITERATIONS safety dialog the
-//   original single-sequence version of this feature used, tracked
-//   per row so one row's confirmation doesn't block another's.
-//
-// - Adaptive mode (Angle Step < 0.1): visibleAnglePointGenerator.js's
-//   visible-region, zoom-scaled cell sampling. Regenerates (debounced,
-//   RENDER_DEBOUNCE_MS) on every zoom/pan/resize/step/sequence change for
-//   that row, since what's tractable to compute depends on what's on
-//   screen.
+// Adaptive rendering, always
+// -----------------------------
+// Every row, at every Angle Step, renders through
+// visibleAnglePointGenerator.js's visible-region, zoom-scaled cell sampling
+// — there is no separate full-domain "exact" sweep mode (an earlier version
+// of this feature had one for coarse steps; it was a full-domain brute-force
+// enumeration whose cost scaled with the *domain*, not the *view*, and was
+// measurably slow even at this feature's own default 0.1 step — see git
+// history if that trade-off is ever worth revisiting). Regenerates
+// (debounced, RENDER_DEBOUNCE_MS) on every zoom/pan/resize/step/sequence
+// change for that row, since what's tractable to compute depends on what's
+// on screen; a "Plot Valid Angle Region" / "Generate/Refresh Plot" click
+// forces an immediate regenerate instead of waiting out the debounce.
 //
 // Multi-sequence job management
 // -------------------------------
@@ -61,9 +52,10 @@ import { buildAngleRegionCacheKey, getCachedAngleRegion, setCachedAngleRegion } 
 // edits, so it can never "reappear" and silently overwrite newer state.
 // Only deleting a row actually drops its cached result.
 //
-// This project has no Web Worker infrastructure (see generateAngleRegion.js's
-// module comment — every render here is a time-sliced async loop on the
-// one JS thread, not a real background thread), so "background processing"
+// This project has no Web Worker infrastructure (see
+// visibleAnglePointGenerator.js's module comment — every render here is a
+// time-sliced async loop on the one JS thread, not a real background
+// thread), so "background processing"
 // for multiple rows means: keep each row's own chunked/yielding loop, and
 // bound how many of those chunked loops interleave at once
 // (MAX_CONCURRENT_SEQUENCE_JOBS) so adding many visible rows doesn't have
@@ -81,7 +73,7 @@ const MIN_SIZE = { width: 380, height: 320 };
 // them feel slower rather than any one of them faster.
 const MAX_CONCURRENT_SEQUENCE_JOBS = 2;
 
-const emptyRowResult = () => ({ points: [], status: 'idle', mode: null, renderInfo: null, progress: null, error: null });
+const emptyRowResult = () => ({ points: [], status: 'idle', renderInfo: null, progress: null, error: null });
 
 export default function AnglePlotWindow({ sequences, activeSequenceId, angleParams, baseLength, buildValidateCandidateForSequence, refreshToken, onClose, onShowAll, onHideAll, onEditGraphs, onRowStatusChange, forceGenerateRequest }) {
   const [pos, setPos] = useState({ x: 96, y: 72 });
@@ -135,8 +127,6 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
   // Per-sequence-id render results/status. Never cleared on hide, only on delete.
   const [results, setResults] = useState({});
   const [isViewLocked, setIsViewLocked] = useState(false);
-  // Array of { id, label, scale, stepUnits, stepDegrees, estimatedIterations } — one entry per row currently blocked on an oversized exact sweep.
-  const [pendingLargeExactSweeps, setPendingLargeExactSweeps] = useState([]);
   const [legendCollapsed, setLegendCollapsed] = useState(false);
   const panelRef = useRef(null);
 
@@ -168,7 +158,16 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
   const lastViewStateRef = useRef(null);
   const prevSequenceSnapshotRef = useRef({}); // id -> { sequenceText, angleStepInput, visible }
   const lastRefreshTokenRef = useRef(refreshToken);
-  const lastForceGenerateTokenRef = useRef(forceGenerateRequest?.token ?? null);
+  // Deliberately initialized to null (never to forceGenerateRequest's
+  // current token) even though this window can mount with a
+  // forceGenerateRequest already set — clicking a row's "Plot Valid Angle
+  // Region" button for the first time opens this window AND sets
+  // forceGenerateRequest in the same click, so on that first mount the prop
+  // already carries the token the effect below is supposed to detect as
+  // new. Seeding the ref from the prop would make that initial token look
+  // already-seen, and the effect would skip scheduling the very job the
+  // click was meant to start.
+  const lastForceGenerateTokenRef = useRef(null);
 
   // Mirrors each row's plot lifecycle out to App.jsx so a graph's card can
   // show "Not plotted / Calculating.../Plotted/Error" even while this
@@ -230,58 +229,8 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
     }
 
     const validateCandidate = buildValidateCandidateForSequenceRef.current(seq.sequenceText, { a: seq.angleA, b: seq.angleB, length: baseLength });
-    const exactMode = isExactModeStep(parsed.scale, parsed.stepUnits);
     const startedAt = performance.now();
-    setRowResult(seq.id, { status: 'running', error: null, progress: exactMode ? { mode: 'exact', tested: 0, total: 0, found: 0 } : { mode: 'adaptive', cellsChecked: 0, found: 0 } });
-
-    if (exactMode) {
-      // In-memory session cache, keyed on every calculation-relevant input
-      // (see resultCache.js). Exact mode is the only thing cached here — it
-      // is the one deterministic, viewport-independent sweep (adaptive mode
-      // depends on the current zoom/pan too, which isn't a stable "input").
-      // A hit skips the entire multi-second sweep and applies instantly.
-      const cacheKey = buildAngleRegionCacheKey({
-        sequenceText: seq.sequenceText, angleA: seq.angleA, angleB: seq.angleB,
-        angleStepInput: seq.angleStepInput, baseLength,
-      });
-      const cached = getCachedAngleRegion(cacheKey);
-      if (cached) {
-        if (import.meta.env.DEV) {
-          console.log(`[${seq.label}] Cache hit — reused ${cached.points.length} points instantly (skipped ${cached.renderInfo.durationMs.toFixed(1)}ms recalculation).`);
-        }
-        setRowResult(seq.id, { points: cached.points, status: 'done', mode: 'exact', renderInfo: { ...cached.renderInfo, fromCache: true } });
-        finishSlot();
-        return;
-      }
-      const estimatedIterations = estimateAngleGridIterations(parsed.scale, parsed.stepUnits, undefined);
-      if (estimatedIterations > BigInt(MAX_ANGLE_GRID_ITERATIONS)) {
-        setPendingLargeExactSweeps((list) => [...list.filter((p) => p.id !== seq.id), { id: seq.id, label: seq.label, ...parsed, estimatedIterations }]);
-        setRowResult(seq.id, { status: 'idle', progress: null });
-        finishSlot();
-        return;
-      }
-      const task = generateAngleRegion({
-        validateCandidate, baseLength, scale: parsed.scale, stepUnits: parsed.stepUnits,
-        onProgress: (p) => {
-          if (jobRequestIdRef.current[seq.id] !== requestId) return;
-          setRowResult(seq.id, { progress: { mode: 'exact', ...p } });
-        },
-      });
-      jobTaskRef.current[seq.id] = task;
-      task.promise.then((resultPoints) => {
-        if (jobRequestIdRef.current[seq.id] === requestId) {
-          const calcMs = performance.now() - startedAt;
-          const renderInfo = { mode: 'exact', userStepDegrees: parsed.stepDegrees, gridStepDegrees: parsed.stepDegrees, displayScale: displayScaleForStep(parsed.scale), pointCount: resultPoints.length, durationMs: calcMs };
-          setCachedAngleRegion(cacheKey, { points: resultPoints, renderInfo });
-          if (import.meta.env.DEV) {
-            console.log(`[${seq.label}]\n  Calculation: ${calcMs.toFixed(1)}ms\n  Geometry preparation: 0.0ms (points are drawn directly, no separate geometry-build step)\n  Total: ${calcMs.toFixed(1)}ms\n  Point count: ${resultPoints.length}`);
-          }
-          setRowResult(seq.id, { points: resultPoints, status: 'done', mode: 'exact', renderInfo });
-        }
-        finishSlot();
-      });
-      return;
-    }
+    setRowResult(seq.id, { status: 'running', error: null, progress: { cellsChecked: 0, found: 0 } });
 
     if (!viewState) {
       // No viewport reported yet (panel hasn't mounted/measured). This row
@@ -295,15 +244,15 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
       excludePoint: seq.id === activeSequenceId ? currentPoint : undefined,
       onProgress: (p) => {
         if (jobRequestIdRef.current[seq.id] !== requestId) return;
-        setRowResult(seq.id, { progress: { mode: 'adaptive', ...p } });
+        setRowResult(seq.id, { progress: p });
       },
     });
     jobTaskRef.current[seq.id] = task;
     task.promise.then((result) => {
       if (jobRequestIdRef.current[seq.id] === requestId) {
         setRowResult(seq.id, {
-          points: result.points, status: 'done', mode: 'adaptive',
-          renderInfo: { mode: 'adaptive', zoomLevel: viewState.zoomLevel, userStepDegrees: parsed.stepDegrees, gridStepDegrees: result.effectiveStepDegrees, requestedStepDegrees: result.requestedStepDegrees, displayScale: displayScaleForStep(parsed.scale), pointCount: result.points.length, durationMs: performance.now() - startedAt, budgetLimited: result.budgetLimited, timeLimited: result.timeLimited },
+          points: result.points, status: 'done',
+          renderInfo: { zoomLevel: viewState.zoomLevel, userStepDegrees: parsed.stepDegrees, gridStepDegrees: result.effectiveStepDegrees, requestedStepDegrees: result.requestedStepDegrees, displayScale: displayScaleForStep(parsed.scale), pointCount: result.points.length, durationMs: performance.now() - startedAt, budgetLimited: result.budgetLimited, timeLimited: result.timeLimited },
         });
       }
       finishSlot();
@@ -335,47 +284,6 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
     }
   }, [enqueueSequenceJob]);
 
-  const confirmLargeExactSweep = useCallback((id) => {
-    const pending = pendingLargeExactSweeps.find((p) => p.id === id);
-    const seq = sequences.find((s) => s.id === id);
-    if (!pending || !seq) return;
-    setPendingLargeExactSweeps((list) => list.filter((p) => p.id !== id));
-    // Re-run the job start directly at exact mode, bypassing the size guard
-    // this once (mirrors the original single-sequence "Generate Anyway").
-    runningIdsRef.current.delete(id); // was never actually added to the running set for this attempt
-    pendingQueueRef.current = pendingQueueRef.current.filter((job) => job.seq.id !== id);
-    const requestId = (jobRequestIdRef.current[id] = (jobRequestIdRef.current[id] || 0) + 1);
-    runningIdsRef.current.add(id);
-    const startedAt = performance.now();
-    setRowResult(id, { status: 'running', progress: { mode: 'exact', tested: 0, total: 0, found: 0 } });
-    const validateCandidate = buildValidateCandidateForSequenceRef.current(seq.sequenceText, { a: seq.angleA, b: seq.angleB, length: baseLength });
-    const task = generateAngleRegion({
-      validateCandidate, baseLength, scale: pending.scale, stepUnits: pending.stepUnits,
-      onProgress: (p) => {
-        if (jobRequestIdRef.current[id] !== requestId) return;
-        setRowResult(id, { progress: { mode: 'exact', ...p } });
-      },
-    });
-    jobTaskRef.current[id] = task;
-    task.promise.then((resultPoints) => {
-      if (jobRequestIdRef.current[id] === requestId) {
-        const calcMs = performance.now() - startedAt;
-        const renderInfo = { mode: 'exact', userStepDegrees: pending.stepDegrees, gridStepDegrees: pending.stepDegrees, displayScale: displayScaleForStep(pending.scale), pointCount: resultPoints.length, durationMs: calcMs };
-        setCachedAngleRegion(buildAngleRegionCacheKey({
-          sequenceText: seq.sequenceText, angleA: seq.angleA, angleB: seq.angleB, angleStepInput: seq.angleStepInput, baseLength,
-        }), { points: resultPoints, renderInfo });
-        if (import.meta.env.DEV) {
-          console.log(`[${seq.label}]\n  Calculation: ${calcMs.toFixed(1)}ms\n  Geometry preparation: 0.0ms (points are drawn directly, no separate geometry-build step)\n  Total: ${calcMs.toFixed(1)}ms\n  Point count: ${resultPoints.length}`);
-        }
-        setRowResult(id, { points: resultPoints, status: 'done', mode: 'exact', renderInfo });
-      }
-      runningIdsRef.current.delete(id);
-      tryStartNextQueuedJob();
-    });
-  }, [pendingLargeExactSweeps, sequences, baseLength, setRowResult, tryStartNextQueuedJob]);
-
-  const dismissLargeExactSweep = useCallback((id) => setPendingLargeExactSweeps((list) => list.filter((p) => p.id !== id)), []);
-
   // Diffs the incoming `sequences` prop against the last snapshot this
   // effect saw, and schedules a render only for rows whose sequence text,
   // Angle Step, or visibility actually changed (or that are brand new) —
@@ -390,7 +298,7 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
   // development-only mount -> cleanup -> mount replay never gets a chance
   // to actually *start* a real generation task on the first (throwaway)
   // pass. Without this, that first pass calls scheduleRenderForSequence
-  // synchronously, which starts a real generateAngleRegion task and stores
+  // synchronously, which starts a real generation task and stores
   // it in jobTaskRef; StrictMode's immediate replay-cleanup then cancels
   // that very task after only its first chunk, and the "result" that
   // resolves is an incomplete, near-empty point set — reproducible locally
@@ -476,16 +384,14 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
   }, []);
 
   // AnglePlotPanel reports every zoom/pan/resize here, undebounced. Every
-  // currently visible adaptive-mode row gets a debounced re-render; exact-
-  // mode rows are untouched since their dataset doesn't depend on the
-  // viewport (AnglePlotPanel redraws their existing points at the new
-  // zoom/pan on its own).
+  // currently visible row gets a debounced re-render, since the adaptive
+  // sampler's stride and sampled cells both depend on the current viewport.
   const handleViewChange = useCallback((viewState) => {
     lastViewStateRef.current = viewState;
     for (const seq of sequencesRef.current) {
       if (!seq.visible) continue;
       const parsed = parseAngleStep(seq.angleStepInput);
-      if (parsed.valid && !isExactModeStep(parsed.scale, parsed.stepUnits)) {
+      if (parsed.valid) {
         scheduleRenderForSequence(seq, viewState);
       }
     }
@@ -546,13 +452,20 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
 
   // Build the drawable series list (visible rows only) and the aggregate status line.
   const visibleSequences = sequences.filter((s) => s.visible);
-  const series = visibleSequences.map((seq) => {
+  // The active graph draws last (on top) whenever series overlap, and
+  // stays on top until a different graph becomes active — everything else
+  // keeps its existing relative order, only the active one moves to the
+  // end of the draw order.
+  const orderedVisibleSequences = visibleSequences.some((s) => s.id === activeSequenceId)
+    ? [...visibleSequences.filter((s) => s.id !== activeSequenceId), ...visibleSequences.filter((s) => s.id === activeSequenceId)]
+    : visibleSequences;
+  const series = orderedVisibleSequences.map((seq) => {
     const result = results[seq.id] || emptyRowResult();
     return {
       id: seq.id, label: seq.label, color: seq.color, sequenceText: seq.sequenceText,
       angleStepInput: seq.angleStepInput, points: result.points || [],
       gridStepDegrees: result.renderInfo?.gridStepDegrees, displayScale: result.renderInfo?.displayScale ?? 1,
-      mode: result.mode, status: result.status,
+      status: result.status,
     };
   });
   const totalPoints = series.reduce((sum, s) => sum + s.points.length, 0);
@@ -569,11 +482,10 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
     if (result.status === 'invalid') return `Invalid: ${result.error}`;
     if (result.status === 'running') {
       const p = result.progress;
-      if (p?.mode === 'exact') return `Calculating… ${(p.tested || 0).toLocaleString()}/${(p.total || 0).toLocaleString()}`;
       return `Calculating… ${(p?.cellsChecked || 0).toLocaleString()} checked`;
     }
     if (result.status === 'idle') return 'Waiting to generate…';
-    return `${(result.points.length || 0).toLocaleString()} points · ${result.mode === 'exact' ? 'Exact' : 'Adaptive'}`;
+    return `${(result.points.length || 0).toLocaleString()} points`;
   };
 
   return (
@@ -685,26 +597,6 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
       <div className="h-1 bg-[#0c1117] shrink-0 overflow-hidden">
         {calculatingCount > 0 && <div className="h-full w-1/3 bg-cyan-400/70 animate-pulse" />}
       </div>
-
-      {pendingLargeExactSweeps.map((pending) => (
-        <div key={pending.id} className="flex flex-col gap-1.5 px-3 py-2 border-b border-amber-400/30 bg-amber-500/10 text-[11px] text-amber-100 shrink-0">
-          <div className="flex items-start gap-2">
-            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-            <span>
-              {pending.label}: step {pending.stepDegrees} would require testing an estimated {pending.estimatedIterations.toLocaleString()} angle
-              combinations in exact mode, over the {MAX_ANGLE_GRID_ITERATIONS.toLocaleString()}-combination safety limit.
-            </span>
-          </div>
-          <div className="flex gap-2 pl-5">
-            <button type="button" onClick={() => confirmLargeExactSweep(pending.id)} className="bg-amber-400/20 hover:bg-amber-400/30 text-amber-100 px-2.5 py-1 rounded-md font-bold">
-              Generate Anyway
-            </button>
-            <button type="button" onClick={() => dismissLargeExactSweep(pending.id)} className="bg-[#101820]/95 hover:bg-[#172230] text-slate-200 px-2.5 py-1 rounded-md font-bold">
-              Cancel (use a larger step)
-            </button>
-          </div>
-        </div>
-      ))}
 
       {/* Legend: compact wrapping strip (not a side panel) so it never eats
           into the graph's own space at this window's minimum size. */}
