@@ -1251,7 +1251,7 @@ const formatVertexLabelList = (labels) => (
  * block per vertex, so a systemic mismatch that fails many vertices still
  * reads as a couple of lines instead of a wall of repeated text.
  */
-const buildVertexLineTestErrorSections = (violations) => {
+const buildVertexLineTestErrorSections = (violations, clearanceEpsilon) => {
   if (!violations || violations.length === 0) {
     return [{ heading: 'Problem', text: 'The Vertex Line Test failed for an unspecified reason.' }];
   }
@@ -1266,7 +1266,16 @@ const buildVertexLineTestErrorSections = (violations) => {
     const { heading, phrase } = categorizeVertexLineViolation(expected);
     sections.push({ heading, text: `${formatVertexLabelList(labels)} ${phrase}.` });
   }
-  sections.push({ heading: 'How to fix', text: 'Adjust the code sequence, Angle A/B, or base triangle so every vertex ends up on its required side of the shot line.' });
+  // Surfaces the current Separation Epsilon: this test's pass/fail line sits
+  // exactly `clearanceEpsilon` away from the shot line (getLineYTolerance),
+  // so the same code+angles can pass at a small epsilon and fail at a
+  // larger one — a real, working tolerance, not a bug, but invisible
+  // without this since Separation Epsilon lives in a different part of the
+  // sidebar than this modal.
+  const epsilonNote = Number.isFinite(clearanceEpsilon)
+    ? ` (current Separation Epsilon: ${clearanceEpsilon})`
+    : '';
+  sections.push({ heading: 'How to fix', text: `Adjust the code sequence, Angle A/B, or base triangle so every vertex ends up on its required side of the shot line${epsilonNote}.` });
   return sections;
 };
 
@@ -2359,7 +2368,7 @@ export default function App() {
       // memo can't be trusted here.
       const check = validateLockedCodeCandidate(row.draftSequenceText, { a: row.draftAngleA, b: row.draftAngleB, length: baseTriangleLength });
       if (!check.allowed) {
-        const sections = buildVertexLineTestErrorSections(check.violations);
+        const sections = buildVertexLineTestErrorSections(check.violations, clearanceEpsilon);
         const flat = sections.map(s => `${s.heading}:\n${s.text}`).join('\n\n');
         setSequences(rows => rows.map(r => r.id === id ? { ...r, validationError: flat, validationErrorSource: 'sequence' } : r));
         // focusId intentionally left unset: a Vertex Line Test failure can
