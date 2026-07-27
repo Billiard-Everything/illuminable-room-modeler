@@ -107,7 +107,12 @@ export default function GraphSetupWindow({
           <div className="grid gap-3 md:grid-cols-2">
             {sequences.map((row) => {
               const isActive = row.id === activeSequenceId;
-              const anglesIncomplete = row.angleA === '' || row.angleB === '';
+              // Reads the drafts, not the applied values — see App.jsx's
+              // identical comment: nothing auto-commits on blur anymore, so
+              // gating this on the applied angleA/B would leave the code
+              // field locked after typing both and moving on without
+              // pressing Enter on either.
+              const anglesIncomplete = row.draftAngleA === '' || row.draftAngleB === '';
               const parsedStep = parseAngleStep(row.angleStepInput);
 
               return (

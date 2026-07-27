@@ -1908,15 +1908,26 @@ export default function App() {
   // alone (its whole purpose is exploring otherwise-invalid geometry), and a
   // path-consistency check against the old code makes no sense here (the
   // code itself is what's changing), so this only runs the direct line test.
-  const validateLockedCodeCandidate = (candidateSequenceText) => {
+  //
+  // `candidateAngleParams` defaults to the memoized `angleParams` (the
+  // active row's already-committed angles) but callers that just committed
+  // a fresh Angle A/B draft in the *same* handler must pass those draft
+  // values explicitly instead: `setSequences` queues a state update rather
+  // than applying it synchronously, so `angleParams` (derived from
+  // `activeSequence`, itself read from the `sequences` state variable)
+  // would still reflect the pre-commit angles until the next render — using
+  // it here would validate the new code against the wrong triangle.
+  const validateLockedCodeCandidate = (candidateSequenceText, candidateAngleParams = angleParams) => {
     if (shotEditMode !== SHOT_MODE_LOCKED) return { allowed: true };
     if (simulatorMode !== 'code') return { allowed: true };
     if (baseInputMode !== 'angles') return { allowed: true };
     if (!candidateSequenceText.trim()) return { allowed: true };
+    if (!hasCompleteAngleParams(candidateAngleParams) || !hasValidAngleTriangle(candidateAngleParams)) return { allowed: true };
 
-    const candidateCodeData = unfoldCodeData(candidateSequenceText, baseTriangle, true);
+    const candidateBaseTriangle = buildBaseTriangle('angles', baseCoordsInput, candidateAngleParams);
+    const candidateCodeData = unfoldCodeData(candidateSequenceText, candidateBaseTriangle, true);
     const candidateValidation = buildPoolshotTowerValidation({
-      simulatorMode: 'code', baseTriangle, activeTriangles: candidateCodeData.triangles,
+      simulatorMode: 'code', baseTriangle: candidateBaseTriangle, activeTriangles: candidateCodeData.triangles,
       labelsMap: candidateCodeData.idxToAngle, reflectionEdges: candidateCodeData.reflectionEdges,
       parsedSequence: candidateCodeData.parsedSequence, clearanceEpsilon,
     });
@@ -2300,13 +2311,26 @@ export default function App() {
   };
 
   // Validates the row's draft and, only if valid, commits it as the applied
-  // sequence (Enter or blur). An invalid draft is left exactly as typed —
-  // this row's validationError is set (for the "Invalid sequence" row
-  // status) and the shared error modal explains why in plain English; nothing
-  // about the graph or main canvas changes for an invalid apply.
+  // sequence (Enter — see the code field's own onKeyDown; blur no longer
+  // triggers this). An invalid draft is left exactly as typed — this row's
+  // validationError is set (for the "Invalid sequence" row status) and the
+  // shared error modal explains why in plain English; nothing about the
+  // graph or main canvas changes for an invalid apply.
   const handleApplySequenceDraft = (id) => {
     const row = sequences.find(r => r.id === id);
     if (!row) return true;
+    // The code field unlocks as soon as Angle A/B are non-blank DRAFTS (see
+    // anglesIncomplete), which can happen without either angle draft ever
+    // having been applied — pressing Enter here first, before the angle
+    // fields' own Enter. Apply those pending drafts now so they're
+    // committed too, mirroring the same chain handlePlotSequenceNow already
+    // runs. Note this does NOT make row.angleA/angleB reliable for the rest
+    // of this function: setSequences queues an update rather than applying
+    // it synchronously, so `row` (read once above) stays exactly as it was
+    // — the Vertex Line Test check below explicitly passes the just-applied
+    // draft angle values instead of relying on the (still stale-this-render)
+    // angleParams memo.
+    if (!applyAngleDrafts(id) || !applyAngleStepDraft(id)) return false;
     // See applyAngleDrafts' identical comment: matching the committed text
     // means nothing NEW to commit, but a stale Sequence error from an
     // earlier rejected draft (since retyped back to the last-valid text)
@@ -2330,7 +2354,10 @@ export default function App() {
     // buildValidateCandidateForSequence) — nothing there is ever "partially
     // plotted" either.
     if (id === activeSequenceId) {
-      const check = validateLockedCodeCandidate(row.draftSequenceText);
+      // Pass the row's own (just-applied-above) draft angles explicitly —
+      // see validateLockedCodeCandidate's comment on why the angleParams
+      // memo can't be trusted here.
+      const check = validateLockedCodeCandidate(row.draftSequenceText, { a: row.draftAngleA, b: row.draftAngleB, length: baseTriangleLength });
       if (!check.allowed) {
         const sections = buildVertexLineTestErrorSections(check.violations);
         const flat = sections.map(s => `${s.heading}:\n${s.text}`).join('\n\n');
@@ -2738,8 +2765,16 @@ export default function App() {
                   const parsedStep = parseAngleStep(row.angleStepInput);
                   // A sequence code is meaningless without a base triangle,
                   // so typing is blocked entirely until this row's own
-                  // Angle A and B are both set — see the sequence input below.
-                  const anglesIncomplete = row.angleA === '' || row.angleB === '';
+                  // Angle A and B are both set — see the sequence input
+                  // below. Reads the DRAFTS, not the applied values: since
+                  // nothing auto-commits on blur anymore (validation only
+                  // fires on Enter/Plot), gating this on the applied value
+                  // would leave the code field locked forever once you type
+                  // A and B and move on without pressing Enter on either —
+                  // exactly the "my input isn't working" deadlock this
+                  // avoids. Whatever's typed still only actually validates
+                  // at Enter/Plot time, same as every other field.
+                  const anglesIncomplete = row.draftAngleA === '' || row.draftAngleB === '';
                   const plotInfo = plotStatusById[row.id];
                   const isPlotting = plotInfo?.status === 'running';
                   // Status line uses the professor's requested vocabulary
@@ -2759,7 +2794,14 @@ export default function App() {
                     : plotPhase === 'Hidden' ? 'text-slate-600'
                     : plotPhase === 'Not plotted' ? 'text-slate-500'
                     : 'text-red-300';
-                  const canPlotNow = !anglesIncomplete && !!row.sequenceText.trim() && !isPlotting;
+                  // Also reads the sequence DRAFT, not the applied text, for
+                  // the same reason as anglesIncomplete above: a freshly
+                  // typed code that was never separately committed must
+                  // still be able to enable this button, since clicking it
+                  // (handlePlotSequenceNow) is exactly what applies every
+                  // pending draft — angles, step, and code together — before
+                  // plotting.
+                  const canPlotNow = !anglesIncomplete && !!row.draftSequenceText.trim() && !isPlotting;
                   return (
                     <div
                       key={row.id}
@@ -2947,7 +2989,7 @@ export default function App() {
                         type="button"
                         onClick={e => { e.stopPropagation(); handlePlotSequenceNow(row.id); }}
                         disabled={!canPlotNow}
-                        title={anglesIncomplete ? 'Set Angle A and Angle B first' : !row.sequenceText.trim() ? 'Enter a sequence code first' : `Calculate and plot ${row.label} on the shared Valid Angle A-B Region graph`}
+                        title={anglesIncomplete ? 'Set Angle A and Angle B first' : !row.draftSequenceText.trim() ? 'Enter a sequence code first' : `Calculate and plot ${row.label} on the shared Valid Angle A-B Region graph`}
                         className="mt-1.5 w-full flex items-center justify-center gap-1.5 bg-cyan-500/15 hover:bg-cyan-500/25 disabled:opacity-40 disabled:cursor-not-allowed border border-cyan-300/30 text-cyan-100 px-2.5 py-1 rounded-md text-[10px] font-bold transition-colors"
                       >
                         {isPlotting ? <Loader2 className="w-3 h-3 animate-spin" /> : <ScatterChart className="w-3 h-3" />}
