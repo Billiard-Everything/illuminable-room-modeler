@@ -1214,39 +1214,60 @@ const buildPoolshotTowerValidation = ({ simulatorMode, baseTriangle, activeTrian
   };
 };
 
-// Turns one buildPoolshotTowerValidation violation into a specific,
-// human-readable WHY + HOW explanation — the Vertex Line Test's own spec
-// explicitly rules out a generic "Invalid input" message, so every distinct
-// failure reason recognized by that validator gets its own explanation here.
-const describeVertexLineViolation = (violation) => {
-  switch (violation.expected) {
-    case 'blue y > line y':
-      return 'This is a blue vertex, so it must sit strictly above the shot line — it currently sits on or below it.\nHow to fix: adjust the code sequence, Angle A/B, or base triangle so this vertex moves above the shot line.';
-    case 'black y < line y':
-      return 'This is a black vertex, so it must sit strictly below the shot line — it currently sits on or above it.\nHow to fix: adjust the code sequence, Angle A/B, or base triangle so this vertex moves below the shot line.';
-    case 'formal blue/black tower color':
-      return 'This vertex never received a formal blue/black role from the reflection sequence, so it cannot be validated against the shot line.\nHow to fix: check the code sequence for a reflection step that produces an inconsistent tower coloring.';
-    case 'nonzero shot vector':
-      return 'The shot’s start and end points coincide, so no shot line exists to test vertices against.\nHow to fix: change the code sequence so the final unfolded position differs from the starting vertex.';
-    case 'nonvertical shot line for y-at-x test':
-      return 'The shot line is perfectly vertical, which this test cannot evaluate as a function of x.\nHow to fix: adjust Angle A/B or the code sequence so the shot is not perfectly vertical.';
-    default:
-      if (violation.expected?.startsWith('tower role')) {
-        return `This vertex has a contradictory reflection-tower role (${violation.expected}).\nHow to fix: check the code sequence for a reflection step that assigns this vertex two different colors.`;
-      }
-      return `This vertex failed the requirement "${violation.expected}".\nHow to fix: adjust the code sequence, Angle A/B, or base triangle so it is satisfied.`;
-  }
+// Maps a buildPoolshotTowerValidation `expected` reason to a short section
+// heading and a one-line phrase — the Vertex Line Test's own spec rules out
+// a generic "Invalid input" message, so every distinct failure reason still
+// gets a specific explanation, but grouped by reason (see
+// buildVertexLineTestErrorSections below) instead of one paragraph per
+// vertex: a real failure often fails 10+ vertices for the exact same root
+// cause, and repeating the same explanation 10+ times is unreadable.
+const VERTEX_LINE_TEST_CATEGORY = {
+  'blue y > line y': { heading: 'Blue vertices on the wrong side', phrase: 'must sit above the shot line' },
+  'black y < line y': { heading: 'Black vertices on the wrong side', phrase: 'must sit below the shot line' },
+  'formal blue/black tower color': { heading: 'Uncolored vertices', phrase: 'never received a formal blue/black role' },
+  'nonzero shot vector': { heading: 'Degenerate shot', phrase: 'the shot has zero length, so no line exists to test against' },
+  'nonvertical shot line for y-at-x test': { heading: 'Vertical shot line', phrase: 'this test cannot evaluate a perfectly vertical shot line' },
+};
+const categorizeVertexLineViolation = (expected) => {
+  if (VERTEX_LINE_TEST_CATEGORY[expected]) return VERTEX_LINE_TEST_CATEGORY[expected];
+  if (expected?.startsWith('tower role')) return { heading: 'Conflicting tower roles', phrase: `have a contradictory role (${expected})` };
+  return { heading: 'Other requirement', phrase: `failed "${expected}"` };
 };
 
-/** Builds the "Vertex Line Test is invalid." error modal's sections from every collected violation (bounded, matches buildPoolshotTowerValidation's own 12-violation cap). */
+// Caps how many individual vertex names are spelled out per group before
+// collapsing the rest into "and N more" — keeps each line short even when
+// many vertices share the same failure.
+const MAX_VERTEX_NAMES_SHOWN = 4;
+const formatVertexLabelList = (labels) => (
+  labels.length <= MAX_VERTEX_NAMES_SHOWN
+    ? labels.join(', ')
+    : `${labels.slice(0, MAX_VERTEX_NAMES_SHOWN).join(', ')}, and ${labels.length - MAX_VERTEX_NAMES_SHOWN} more`
+);
+
+/**
+ * Builds the "Vertex Line Test is invalid." error modal's sections: one
+ * short line per distinct failure reason (grouping every vertex that fails
+ * for that same reason), plus one shared "How to fix" line — never one
+ * block per vertex, so a systemic mismatch that fails many vertices still
+ * reads as a couple of lines instead of a wall of repeated text.
+ */
 const buildVertexLineTestErrorSections = (violations) => {
   if (!violations || violations.length === 0) {
     return [{ heading: 'Problem', text: 'The Vertex Line Test failed for an unspecified reason.' }];
   }
-  return violations.slice(0, 12).map((violation) => ({
-    heading: `${violation.triId} ${violation.vertexName}${violation.symbol ? ` (${violation.symbol})` : ''}`,
-    text: describeVertexLineViolation(violation),
-  }));
+  const groups = new Map();
+  for (const violation of violations) {
+    const label = `${violation.triId} ${violation.vertexName}${violation.symbol ? ` (${violation.symbol})` : ''}`;
+    if (!groups.has(violation.expected)) groups.set(violation.expected, []);
+    groups.get(violation.expected).push(label);
+  }
+  const sections = [];
+  for (const [expected, labels] of groups) {
+    const { heading, phrase } = categorizeVertexLineViolation(expected);
+    sections.push({ heading, text: `${formatVertexLabelList(labels)} ${phrase}.` });
+  }
+  sections.push({ heading: 'How to fix', text: 'Adjust the code sequence, Angle A/B, or base triangle so every vertex ends up on its required side of the shot line.' });
+  return sections;
 };
 
 /** Compares two physical-to-symbol maps for exact current-mapping preservation. */
@@ -2305,7 +2326,13 @@ export default function App() {
         const sections = buildVertexLineTestErrorSections(check.violations);
         const flat = sections.map(s => `${s.heading}:\n${s.text}`).join('\n\n');
         setSequences(rows => rows.map(r => r.id === id ? { ...r, validationError: flat, validationErrorSource: 'sequence' } : r));
-        setErrorModal({ title: 'Vertex Line Test is invalid.', sections, focusId: id });
+        // focusId intentionally left unset: a Vertex Line Test failure can
+        // be fixed via the code OR the angles, so forcibly refocusing the
+        // code field on close (like a code *syntax* error does) would be a
+        // guess at which one the user actually wants to edit next — and
+        // risks stealing focus back from whichever field they've already
+        // clicked into by the time the close-triggered refocus fires.
+        setErrorModal({ title: 'Vertex Line Test is invalid.', sections, focusId: null });
         return false;
       }
     }
@@ -3623,12 +3650,15 @@ export default function App() {
             aria-labelledby="sequence-error-title"
             aria-describedby="sequence-error-message"
             onClick={e => e.stopPropagation()}
-            className="w-full max-w-sm bg-[#151c24] border border-red-400/30 rounded-lg shadow-[0_20px_60px_rgba(0,0,0,0.55)] p-4"
+            className="w-full max-w-sm max-h-[85vh] flex flex-col bg-[#151c24] border border-red-400/30 rounded-lg shadow-[0_20px_60px_rgba(0,0,0,0.55)] p-4"
           >
-            <h3 id="sequence-error-title" className="text-sm font-bold text-red-200 mb-3 flex items-center gap-1.5">
+            <h3 id="sequence-error-title" className="text-sm font-bold text-red-200 mb-3 flex items-center gap-1.5 shrink-0">
               <AlertTriangle className="w-4 h-4 shrink-0" /> {errorModal.title}
             </h3>
-            <div id="sequence-error-message" className="text-xs text-slate-300 leading-relaxed mb-4 space-y-3">
+            {/* Scrolls independently of the title/OK button so a long list of
+                sections (e.g. many distinct Vertex Line Test failure
+                categories) can never push the OK button off-screen. */}
+            <div id="sequence-error-message" className="text-xs text-slate-300 leading-relaxed mb-4 space-y-3 overflow-y-auto custom-scrollbar flex-1 min-h-0">
               {errorModal.sections.map((section, i) => (
                 <div key={i}>
                   <div className="text-[10px] uppercase tracking-wider font-bold text-slate-500 mb-0.5">{section.heading}</div>
@@ -3642,7 +3672,7 @@ export default function App() {
                 </div>
               ))}
             </div>
-            <div className="flex justify-end gap-2">
+            <div className="flex justify-end gap-2 shrink-0">
               <button
                 type="button"
                 autoFocus
