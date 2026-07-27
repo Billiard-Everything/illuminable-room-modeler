@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { X, RotateCcw, RefreshCw, Loader2, GripHorizontal, ZoomIn, ZoomOut, Maximize, Maximize2, Minimize2, Lock, Unlock, AlertTriangle, Eye, EyeOff, Minus, Square } from 'lucide-react';
 import AnglePlotPanel from './AnglePlotPanel.jsx';
 import { generateVisibleAnglePoints } from './visibleAnglePointGenerator.js';
+import { generateAngleRegion } from './generateAngleRegion.js';
+import { chooseRenderer, RENDERER_MODE } from './rendererSelection.js';
 import { parseAngleStep, displayScaleForStep } from './angleStep.js';
 import { RENDER_DEBOUNCE_MS } from './renderSamplingPolicy.js';
 import { truncateSequenceText } from '../sequences/sequenceGraphConfig.js';
@@ -26,19 +28,27 @@ import { graphCache, buildGraphCacheKey } from './graphCache.js';
 // serve the same purpose ("stop the view from moving") in two different
 // views.
 //
-// Adaptive rendering, always
-// -----------------------------
-// Every row, at every Angle Step, renders through
-// visibleAnglePointGenerator.js's visible-region, zoom-scaled cell sampling
-// — there is no separate full-domain "exact" sweep mode (an earlier version
-// of this feature had one for coarse steps; it was a full-domain brute-force
-// enumeration whose cost scaled with the *domain*, not the *view*, and was
-// measurably slow even at this feature's own default 0.1 step — see git
-// history if that trade-off is ever worth revisiting). Regenerates
-// (debounced, RENDER_DEBOUNCE_MS) on every zoom/pan/resize/step/sequence
-// change for that row, since what's tractable to compute depends on what's
-// on screen; a "Plot Valid Angle Region" / "Generate/Refresh Plot" click
-// forces an immediate regenerate instead of waiting out the debounce.
+// Hybrid rendering: brute force or adaptive, chosen automatically
+// -----------------------------------------------------------------
+// Every row's Angle Step is routed through rendererSelection.js's
+// chooseRenderer, which estimates the full-domain brute-force cost
+// (generateAngleRegion.js's exact sweep) from the step alone and picks it
+// only when that estimate is cheap enough (default ~6s); otherwise this
+// falls back to visibleAnglePointGenerator.js's visible-region, zoom-scaled
+// adaptive sampling — automatically, with no user-facing mode toggle. (An
+// earlier version of this feature always used brute force above a fixed
+// step threshold regardless of cost, which was measurably slow even at
+// this feature's own default 0.1 step; a later version removed brute force
+// entirely. This reintroduces it, but gated by an actual cost estimate
+// instead of a step-size threshold, so it is never chosen for a
+// configuration expensive enough to repeat that regression.) Because brute
+// force always sweeps the whole domain, its cached result does not depend
+// on the viewport and survives any amount of panning/zooming; the adaptive
+// path keeps regenerating (debounced, RENDER_DEBOUNCE_MS) on every
+// zoom/pan/resize/step/sequence change exactly as before, since what's
+// tractable to compute there depends on what's on screen. A "Plot Valid
+// Angle Region" / "Generate/Refresh Plot" click forces an immediate
+// regenerate instead of waiting out the debounce, for either renderer.
 //
 // Multi-sequence job management
 // -------------------------------
@@ -241,46 +251,95 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
     }
 
     const excludePoint = seq.id === activeSequenceId ? currentPoint : undefined;
-    // GraphCache (Stage 1 — see graphCache.js): every input that can change
-    // generateVisibleAnglePoints' output is folded into one deterministic
-    // key. A hit reuses the exact previously computed geometry with no
-    // recomputation at all; a miss runs the unchanged adaptive generator
-    // exactly as before and stores its result for next time.
+
+    // RendererSelection (see rendererSelection.js) is the one place that
+    // decides brute-force vs. adaptive, purely from the Angle Step's
+    // estimated full-domain cost — never by timing an actual run. Brute
+    // force always sweeps the whole 0-90 domain (see generateAngleRegion.js),
+    // so unlike the adaptive path its result does not depend on the current
+    // viewport at all: the cache key below omits viewBounds/viewportSize for
+    // it, which is what lets a "cheap" graph's cached result survive any
+    // amount of panning/zooming instead of recomputing per view.
+    const decision = chooseRenderer({ scale: parsed.scale, stepUnits: parsed.stepUnits });
+    const useBruteForce = decision.mode === RENDERER_MODE.BRUTE_FORCE;
+
+    // GraphCache (see graphCache.js): every input that can change the
+    // chosen generator's output is folded into one deterministic key. A hit
+    // reuses the exact previously computed geometry — regardless of which
+    // renderer originally produced it — with no recomputation at all; a
+    // miss runs whichever generator was just chosen, unchanged, and stores
+    // its result for next time.
     const cacheKey = buildGraphCacheKey({
       sequenceText: seq.sequenceText, angleA: seq.angleA, angleB: seq.angleB,
-      angleStepInput: seq.angleStepInput, baseLength,
-      viewBounds: viewState.bounds, viewportSize: viewState.viewportSize, excludePoint,
+      angleStepInput: seq.angleStepInput, baseLength, excludePoint,
+      ...(useBruteForce ? {} : { viewBounds: viewState.bounds, viewportSize: viewState.viewportSize }),
     });
     const cached = graphCache.get(cacheKey);
     if (cached) {
-      if (import.meta.env.DEV) console.log(`[GraphCache] HIT — ${seq.label} (${cached.renderInfo.pointCount} points reused)`);
+      if (import.meta.env.DEV) console.log(`Renderer: Cache Hit — ${seq.label} (${cached.renderInfo.pointCount} points reused)`);
       setRowResult(seq.id, { points: cached.points, status: 'done', renderInfo: { ...cached.renderInfo, fromCache: true } });
       finishSlot();
       return;
     }
-    if (import.meta.env.DEV) console.log(`[GraphCache] MISS — ${seq.label}, computing`);
+    if (import.meta.env.DEV) {
+      const costLabel = `estimated cost ${decision.estimatedSeconds.toFixed(2)}s for ~${decision.estimatedIterations.toLocaleString()} candidates`;
+      console.log(useBruteForce
+        ? `Renderer: Brute Force (${costLabel}) — ${seq.label}`
+        : `Renderer: Adaptive (${costLabel}) — ${seq.label}`);
+    }
 
-    const task = generateVisibleAnglePoints({
-      validateCandidate, baseLength, scale: parsed.scale, stepUnits: parsed.stepUnits,
-      viewBounds: viewState.bounds, viewportSize: viewState.viewportSize, zoomLevel: viewState.zoomLevel,
-      excludePoint,
-      onProgress: (p) => {
-        if (jobRequestIdRef.current[seq.id] !== requestId) return;
-        setRowResult(seq.id, { progress: p });
-      },
-    });
+    // Both generators return the same { promise, cancel } shape and are
+    // driven identically from here on; only their progress/result shapes
+    // differ, normalized below so the rest of this function (and the row
+    // status UI) never needs to know which one actually ran.
+    // generateAngleRegion's onProgress carries `timeLimited` only on its
+    // final ({done: true}) call (see its own module comment on the
+    // MAX_ADAPTIVE_RENDER_MS backstop) — captured here since the resolved
+    // promise itself is just a plain points array with nowhere else to
+    // carry that flag.
+    let bruteForceTimeLimited = false;
+    const task = useBruteForce
+      ? generateAngleRegion({
+          validateCandidate, baseLength, scale: parsed.scale, stepUnits: parsed.stepUnits,
+          onProgress: (p) => {
+            if (p.timeLimited) bruteForceTimeLimited = true;
+            if (jobRequestIdRef.current[seq.id] !== requestId) return;
+            setRowResult(seq.id, { progress: { cellsChecked: p.tested, found: p.found } });
+          },
+        })
+      : generateVisibleAnglePoints({
+          validateCandidate, baseLength, scale: parsed.scale, stepUnits: parsed.stepUnits,
+          viewBounds: viewState.bounds, viewportSize: viewState.viewportSize, zoomLevel: viewState.zoomLevel,
+          excludePoint,
+          onProgress: (p) => {
+            if (jobRequestIdRef.current[seq.id] !== requestId) return;
+            setRowResult(seq.id, { progress: p });
+          },
+        });
     jobTaskRef.current[seq.id] = task;
     task.promise.then((result) => {
       if (jobRequestIdRef.current[seq.id] === requestId) {
-        const renderInfo = { zoomLevel: viewState.zoomLevel, userStepDegrees: parsed.stepDegrees, gridStepDegrees: result.effectiveStepDegrees, requestedStepDegrees: result.requestedStepDegrees, displayScale: displayScaleForStep(parsed.scale), pointCount: result.points.length, durationMs: performance.now() - startedAt, budgetLimited: result.budgetLimited, timeLimited: result.timeLimited };
-        // A genuinely cancelled/superseded sweep never reaches here at all
-        // — the requestId check above already guards this whole block — so
+        // generateAngleRegion resolves to a plain points array (exact sweep,
+        // no stride/budget concept); generateVisibleAnglePoints resolves to
+        // a richer object. Normalized into one renderInfo shape either way.
+        // `renderer` records which one actually ran — an exact brute-force
+        // result never needs refinement, while an adaptive one is a
+        // viewport-scoped approximation that could be refined toward the
+        // full-resolution grid later; a future background-refinement stage
+        // (see rendererSelection.js's own extension-point comment) can
+        // branch on this without needing any other change here.
+        const points = useBruteForce ? result : result.points;
+        const renderInfo = useBruteForce
+          ? { renderer: RENDERER_MODE.BRUTE_FORCE, zoomLevel: viewState?.zoomLevel, userStepDegrees: parsed.stepDegrees, gridStepDegrees: parsed.stepDegrees, requestedStepDegrees: parsed.stepDegrees, displayScale: displayScaleForStep(parsed.scale), pointCount: points.length, durationMs: performance.now() - startedAt, budgetLimited: false, timeLimited: bruteForceTimeLimited }
+          : { renderer: RENDERER_MODE.ADAPTIVE, zoomLevel: viewState.zoomLevel, userStepDegrees: parsed.stepDegrees, gridStepDegrees: result.effectiveStepDegrees, requestedStepDegrees: result.requestedStepDegrees, displayScale: displayScaleForStep(parsed.scale), pointCount: points.length, durationMs: performance.now() - startedAt, budgetLimited: result.budgetLimited, timeLimited: result.timeLimited };
+        // A genuinely cancelled/superseded job never reaches here at all —
+        // the requestId check above already guards this whole block — so
         // anything that does is a real, finished computation worth caching
         // (including a timeLimited one: it deterministically hit the same
         // wall-clock cap for this exact key, so reusing it instead of
         // re-paying that same cost again is the right tradeoff).
-        graphCache.set(cacheKey, { points: result.points, renderInfo });
-        setRowResult(seq.id, { points: result.points, status: 'done', renderInfo });
+        graphCache.set(cacheKey, { points, renderInfo });
+        setRowResult(seq.id, { points, status: 'done', renderInfo });
       }
       finishSlot();
     });
@@ -418,9 +477,13 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
     for (const seq of sequencesRef.current) {
       if (!seq.visible) continue;
       const parsed = parseAngleStep(seq.angleStepInput);
-      if (parsed.valid) {
-        scheduleRenderForSequence(seq, viewState);
-      }
+      if (!parsed.valid) continue;
+      // Brute-force rows (rendererSelection.js) always sweep the whole
+      // domain, so their result never depends on the viewport — scheduling
+      // a re-render for one here would only ever re-hit the same GraphCache
+      // entry, so skipping it avoids that pointless work on every pan/zoom.
+      if (chooseRenderer({ scale: parsed.scale, stepUnits: parsed.stepUnits }).mode === RENDERER_MODE.BRUTE_FORCE) continue;
+      scheduleRenderForSequence(seq, viewState);
     }
   }, [scheduleRenderForSequence]);
 
