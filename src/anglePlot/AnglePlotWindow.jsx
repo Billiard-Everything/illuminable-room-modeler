@@ -5,6 +5,7 @@ import { generateVisibleAnglePoints } from './visibleAnglePointGenerator.js';
 import { parseAngleStep, displayScaleForStep } from './angleStep.js';
 import { RENDER_DEBOUNCE_MS } from './renderSamplingPolicy.js';
 import { truncateSequenceText } from '../sequences/sequenceGraphConfig.js';
+import { graphCache, buildGraphCacheKey } from './graphCache.js';
 
 // AnglePlotWindow: the pop-up "Valid Angle A-B Region" graph. This project
 // is a browser React app, not a desktop toolkit, so there is no native OS
@@ -238,10 +239,31 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
       finishSlot();
       return;
     }
+
+    const excludePoint = seq.id === activeSequenceId ? currentPoint : undefined;
+    // GraphCache (Stage 1 — see graphCache.js): every input that can change
+    // generateVisibleAnglePoints' output is folded into one deterministic
+    // key. A hit reuses the exact previously computed geometry with no
+    // recomputation at all; a miss runs the unchanged adaptive generator
+    // exactly as before and stores its result for next time.
+    const cacheKey = buildGraphCacheKey({
+      sequenceText: seq.sequenceText, angleA: seq.angleA, angleB: seq.angleB,
+      angleStepInput: seq.angleStepInput, baseLength,
+      viewBounds: viewState.bounds, viewportSize: viewState.viewportSize, excludePoint,
+    });
+    const cached = graphCache.get(cacheKey);
+    if (cached) {
+      if (import.meta.env.DEV) console.log(`[GraphCache] HIT — ${seq.label} (${cached.renderInfo.pointCount} points reused)`);
+      setRowResult(seq.id, { points: cached.points, status: 'done', renderInfo: { ...cached.renderInfo, fromCache: true } });
+      finishSlot();
+      return;
+    }
+    if (import.meta.env.DEV) console.log(`[GraphCache] MISS — ${seq.label}, computing`);
+
     const task = generateVisibleAnglePoints({
       validateCandidate, baseLength, scale: parsed.scale, stepUnits: parsed.stepUnits,
       viewBounds: viewState.bounds, viewportSize: viewState.viewportSize, zoomLevel: viewState.zoomLevel,
-      excludePoint: seq.id === activeSequenceId ? currentPoint : undefined,
+      excludePoint,
       onProgress: (p) => {
         if (jobRequestIdRef.current[seq.id] !== requestId) return;
         setRowResult(seq.id, { progress: p });
@@ -250,10 +272,15 @@ export default function AnglePlotWindow({ sequences, activeSequenceId, anglePara
     jobTaskRef.current[seq.id] = task;
     task.promise.then((result) => {
       if (jobRequestIdRef.current[seq.id] === requestId) {
-        setRowResult(seq.id, {
-          points: result.points, status: 'done',
-          renderInfo: { zoomLevel: viewState.zoomLevel, userStepDegrees: parsed.stepDegrees, gridStepDegrees: result.effectiveStepDegrees, requestedStepDegrees: result.requestedStepDegrees, displayScale: displayScaleForStep(parsed.scale), pointCount: result.points.length, durationMs: performance.now() - startedAt, budgetLimited: result.budgetLimited, timeLimited: result.timeLimited },
-        });
+        const renderInfo = { zoomLevel: viewState.zoomLevel, userStepDegrees: parsed.stepDegrees, gridStepDegrees: result.effectiveStepDegrees, requestedStepDegrees: result.requestedStepDegrees, displayScale: displayScaleForStep(parsed.scale), pointCount: result.points.length, durationMs: performance.now() - startedAt, budgetLimited: result.budgetLimited, timeLimited: result.timeLimited };
+        // A genuinely cancelled/superseded sweep never reaches here at all
+        // — the requestId check above already guards this whole block — so
+        // anything that does is a real, finished computation worth caching
+        // (including a timeLimited one: it deterministically hit the same
+        // wall-clock cap for this exact key, so reusing it instead of
+        // re-paying that same cost again is the right tradeoff).
+        graphCache.set(cacheKey, { points: result.points, renderInfo });
+        setRowResult(seq.id, { points: result.points, status: 'done', renderInfo });
       }
       finishSlot();
     });
