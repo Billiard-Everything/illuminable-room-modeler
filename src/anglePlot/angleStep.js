@@ -111,5 +111,38 @@ export const computeSweepRange = (scale, stepUnits, viewBounds) => {
   return { limitUnits, startAUnits, endAUnits, minBUnits, maxBUnitsCap };
 };
 
+/**
+ * Estimates how many candidate (A, B) pairs a full sweep would test at the
+ * given step (optionally narrowed to `viewBounds` — see computeSweepRange),
+ * without actually running it. Close enough to serve as a progress-bar
+ * denominator for generateAngleRegion.js, and as the input to
+ * rendererSelection.js's cost estimate (see chooseRenderer) that decides
+ * whether a configuration is cheap enough for that exact brute-force sweep
+ * or should fall back to the adaptive sampler instead — neither of those
+ * would be safe to base on an actual timed trial run.
+ */
+export const estimateAngleGridIterations = (scale, stepUnits, viewBounds) => {
+  if (stepUnits <= 0n) return 0n;
+  const { limitUnits, startAUnits, endAUnits, minBUnits, maxBUnitsCap } = computeSweepRange(scale, stepUnits, viewBounds);
+  if (endAUnits < startAUnits) return 0n;
+
+  const bSpanUnitsAt = (aUnits) => {
+    const domainBMax = limitUnits - aUnits;
+    const bMax = maxBUnitsCap !== null && maxBUnitsCap < domainBMax ? maxBUnitsCap : domainBMax;
+    const bMinCandidate = aUnits + stepUnits;
+    const bMin = minBUnits !== null && minBUnits > bMinCandidate ? minBUnits : bMinCandidate;
+    return bMax > bMin ? (bMax - bMin) / stepUnits : 0n;
+  };
+
+  const stepsInA = (endAUnits - startAUnits) / stepUnits + 1n;
+  // Trapezoidal estimate across A: exact when the per-A B-span is linear in
+  // A (the unbounded case), a good approximation when a viewport rectangle
+  // clips it into a piecewise-linear shape. This only feeds a progress bar
+  // and a cost estimate, so it does not need to be exact.
+  const midAUnits = startAUnits + ((endAUnits - startAUnits) / 2n);
+  const avgBSpan = (bSpanUnitsAt(startAUnits) + 2n * bSpanUnitsAt(midAUnits) + bSpanUnitsAt(endAUnits)) / 4n;
+  return stepsInA * avgBSpan;
+};
+
 /** Decimal places needed to show every digit of the given step without rounding it away. */
 export const displayScaleForStep = (scale) => Math.max(0, scale);
