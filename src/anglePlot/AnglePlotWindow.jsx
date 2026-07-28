@@ -3,11 +3,14 @@ import { X, RotateCcw, RefreshCw, Loader2, GripHorizontal, ZoomIn, ZoomOut, Maxi
 import AnglePlotPanel from './AnglePlotPanel.jsx';
 import { generateVisibleAnglePoints } from './visibleAnglePointGenerator.js';
 import { generateAngleRegion } from './generateAngleRegion.js';
-import { chooseRenderer, RENDERER_MODE } from './rendererSelection.js';
+import { RENDERER_MODE } from './rendererSelection.js';
 import { parseAngleStep, displayScaleForStep } from './angleStep.js';
-import { RENDER_DEBOUNCE_MS } from './renderSamplingPolicy.js';
+import { RENDER_DEBOUNCE_MS, MAX_BACKGROUND_EXACT_RENDER_MS } from './renderSamplingPolicy.js';
 import { truncateSequenceText } from '../sequences/sequenceGraphConfig.js';
 import { graphCache, buildGraphCacheKey } from './graphCache.js';
+import { requestExactComputation, isExactComputationRunning } from './backgroundExactWorker.js';
+import { GRAPH_STATUS } from './graphStatus.js';
+import { graphParamsFromSequence } from './graph.js';
 
 // AnglePlotWindow: the pop-up "Valid Angle A-B Region" graph. This project
 // is a browser React app, not a desktop toolkit, so there is no native OS
@@ -28,27 +31,28 @@ import { graphCache, buildGraphCacheKey } from './graphCache.js';
 // serve the same purpose ("stop the view from moving") in two different
 // views.
 //
-// Hybrid rendering: brute force or adaptive, chosen automatically
-// -----------------------------------------------------------------
-// Every row's Angle Step is routed through rendererSelection.js's
-// chooseRenderer, which estimates the full-domain brute-force cost
-// (generateAngleRegion.js's exact sweep) from the step alone and picks it
-// only when that estimate is cheap enough (default ~6s); otherwise this
-// falls back to visibleAnglePointGenerator.js's visible-region, zoom-scaled
-// adaptive sampling — automatically, with no user-facing mode toggle. (An
-// earlier version of this feature always used brute force above a fixed
-// step threshold regardless of cost, which was measurably slow even at
-// this feature's own default 0.1 step; a later version removed brute force
-// entirely. This reintroduces it, but gated by an actual cost estimate
-// instead of a step-size threshold, so it is never chosen for a
-// configuration expensive enough to repeat that regression.) Because brute
-// force always sweeps the whole domain, its cached result does not depend
-// on the viewport and survives any amount of panning/zooming; the adaptive
-// path keeps regenerating (debounced, RENDER_DEBOUNCE_MS) on every
-// zoom/pan/resize/step/sequence change exactly as before, since what's
-// tractable to compute there depends on what's on screen. A "Plot Valid
-// Angle Region" / "Generate/Refresh Plot" click forces an immediate
-// regenerate instead of waiting out the debounce, for either renderer.
+// Instant preview, silent background exact upgrade (graph.js/graphCache.js/
+// backgroundExactWorker.js)
+// -----------------------------------------------------------------------
+// Every row is generated in up to two phases, never gated by a cost
+// estimate: first, the viewport-scoped adaptive sampler
+// (visibleAnglePointGenerator.js) runs (or a previous adaptive/exact result
+// is reused from GraphCache), so the user always sees *something* as fast
+// as this app has ever shown one. Immediately after that preview is on
+// screen, a full-domain exact brute-force sweep (generateAngleRegion.js) for
+// the same graph is kicked off in the background (deduped by content hash
+// across rows via backgroundExactWorker.js, so identical rows never pay for
+// two sweeps) and, when it finishes, silently replaces that row's
+// points/renderInfo with the exact result — no visible reload, no change to
+// the row's order/color/visibility/selection. Because the exact sweep
+// always covers the whole domain, its cached result does not depend on the
+// viewport and survives any amount of panning/zooming (see
+// handleViewChange's own skip for EXACT rows); the adaptive path keeps
+// regenerating (debounced, RENDER_DEBOUNCE_MS) on every zoom/pan/resize/
+// step/sequence change exactly as before, since what's tractable to compute
+// there depends on what's on screen. A "Plot Valid Angle Region" /
+// "Generate/Refresh Plot" click forces an immediate regenerate instead of
+// waiting out the debounce.
 //
 // Multi-sequence job management
 // -------------------------------
@@ -215,6 +219,12 @@ export default function AnglePlotWindow({
   const jobTaskRef = useRef({}); // id -> { promise, cancel }
   const jobRequestIdRef = useRef({}); // id -> number, bumped on every (re)start or cancel
   const runningIdsRef = useRef(new Set());
+  // id -> unsubscribe function for that row's currently-pending background
+  // exact job listener (see backgroundExactWorker.js). The job itself keeps
+  // running (and still caches its result) even after this is called — this
+  // only stops it from calling setRowResult for a row that's since been
+  // deleted or edited away from the hash it subscribed to.
+  const backgroundUnsubscribersRef = useRef({});
   const pendingQueueRef = useRef([]); // [{ seq, viewState }]
   const lastViewStateRef = useRef(null);
   const prevSequenceSnapshotRef = useRef({}); // id -> { sequenceText, angleStepInput, visible }
@@ -273,6 +283,28 @@ export default function AnglePlotWindow({
     }
   }, []);
 
+  // Instant preview + silent background exact upgrade
+  // -----------------------------------------------------
+  // STEP 1/2 (see the module's own architecture doc above the imports):
+  // every request first checks GraphCache for this graph's EXACT (viewport-
+  // independent) entry. A hit is used immediately and nothing is computed
+  // at all — not adaptive, not a background job — since the full,
+  // permanent answer already exists.
+  // STEP 3: on a miss, the existing viewport-scoped adaptive path runs
+  // exactly as before (own cache key, own generator, own progress
+  // reporting) so the user sees *something* as fast as this app has ever
+  // shown one, regardless of how expensive the exact sweep would be.
+  // STEP 4: once that preview is on screen, a background exact computation
+  // is requested (backgroundExactWorker.js) — deduped by hash, so N rows
+  // (or N re-renders of the same row) sharing one hash only ever pay for
+  // one sweep between them. It reports no progress and never touches this
+  // row's `status`/`progress` fields (those already read "done" from the
+  // preview) — only `points`/`renderInfo` are swapped, silently, when it
+  // resolves, which is what makes the exact result feel like a seamless
+  // upgrade rather than a second visible loading cycle. See
+  // backgroundExactWorker.isExactComputationRunning(hash) for how a future
+  // "still refining…" indicator would read the in-between COMPUTING state
+  // without this needing to push it into per-row state at all.
   const startSequenceJob = useCallback((seq, viewState) => {
     runningIdsRef.current.add(seq.id);
     const requestId = (jobRequestIdRef.current[seq.id] = (jobRequestIdRef.current[seq.id] || 0) + 1);
@@ -293,6 +325,22 @@ export default function AnglePlotWindow({
     const startedAt = performance.now();
     setRowResult(seq.id, { status: 'running', error: null, progress: { cellsChecked: 0, found: 0 } });
 
+    // A graph's exact identity never depends on the viewport or on which
+    // row happens to be active — see graph.js's own comment on why
+    // `excludePoint` (a display-only concern) is deliberately excluded here
+    // even though the adaptive/preview cache key below still includes it.
+    const exactHash = buildGraphCacheKey(graphParamsFromSequence(seq, baseLength));
+
+    // STEP 2: an exact hit is final and needs nothing further — no
+    // adaptive preview, no background job, no further cache writes.
+    const cachedExact = graphCache.get(exactHash);
+    if (cachedExact) {
+      if (import.meta.env.DEV) console.log(`Renderer: Cache Hit (exact) — ${seq.label} (${cachedExact.renderInfo.pointCount} points reused)`);
+      setRowResult(seq.id, { points: cachedExact.points, status: 'done', renderInfo: { ...cachedExact.renderInfo, fromCache: true } });
+      finishSlot();
+      return;
+    }
+
     if (!viewState) {
       // No viewport reported yet (panel hasn't mounted/measured). This row
       // will be picked up by the next handleViewChange call once it does.
@@ -302,96 +350,109 @@ export default function AnglePlotWindow({
 
     const excludePoint = seq.id === activeSequenceId ? currentPoint : undefined;
 
-    // RendererSelection (see rendererSelection.js) is the one place that
-    // decides brute-force vs. adaptive, purely from the Angle Step's
-    // estimated full-domain cost — never by timing an actual run. Brute
-    // force always sweeps the whole 0-90 domain (see generateAngleRegion.js),
-    // so unlike the adaptive path its result does not depend on the current
-    // viewport at all: the cache key below omits viewBounds/viewportSize for
-    // it, which is what lets a "cheap" graph's cached result survive any
-    // amount of panning/zooming instead of recomputing per view.
-    const decision = chooseRenderer({ scale: parsed.scale, stepUnits: parsed.stepUnits });
-    const useBruteForce = decision.mode === RENDERER_MODE.BRUTE_FORCE;
+    // Kicks off (or joins) the background exact sweep for this graph once
+    // a preview is already showing — shared by both the preview-cache-hit
+    // path and the freshly-computed-preview path below so neither has to
+    // duplicate this.
+    const startBackgroundExact = () => {
+      // A previous background job this row was subscribed to (e.g. a
+      // still-in-flight sweep for whatever this row's *last* configuration
+      // was) is no longer relevant to this row once it's been replotted
+      // under a new hash — stop listening to it so its eventual result
+      // can't land on this row instead of the one it belongs to.
+      backgroundUnsubscribersRef.current[seq.id]?.();
+      const alreadyRunning = isExactComputationRunning(exactHash);
+      if (import.meta.env.DEV) {
+        console.log(alreadyRunning
+          ? `Renderer: Background Exact joined (already running) — ${seq.label}`
+          : `Renderer: Background Exact started — ${seq.label}`);
+      }
+      const bgStartedAt = performance.now();
+      let bgTimeLimited = false;
+      const unsubscribe = requestExactComputation(
+        exactHash,
+        () => generateAngleRegion({
+          validateCandidate, baseLength, scale: parsed.scale, stepUnits: parsed.stepUnits,
+          maxRenderMs: MAX_BACKGROUND_EXACT_RENDER_MS,
+          onProgress: (p) => { if (p.timeLimited) bgTimeLimited = true; },
+        }),
+        (points, error) => {
+          if (error) {
+            if (import.meta.env.DEV) console.warn(`Renderer: Background Exact failed — ${seq.label}`, error);
+            return;
+          }
+          const renderInfo = {
+            renderer: RENDERER_MODE.BRUTE_FORCE, graphStatus: GRAPH_STATUS.EXACT,
+            userStepDegrees: parsed.stepDegrees, gridStepDegrees: parsed.stepDegrees, requestedStepDegrees: parsed.stepDegrees,
+            displayScale: displayScaleForStep(parsed.scale), pointCount: points.length,
+            durationMs: performance.now() - bgStartedAt, budgetLimited: false, timeLimited: bgTimeLimited,
+          };
+          // Cached for every future request of this exact graph — including
+          // ones App.jsx's own workspace-restore path or a completely
+          // different row will make later — regardless of whether any row
+          // currently on screen still matches it.
+          graphCache.set(exactHash, { points, renderInfo });
+          if (import.meta.env.DEV) console.log(`Renderer: Background Exact complete — ${seq.label} (${points.length} points, ${renderInfo.durationMs.toFixed(0)}ms)`);
+          // Only apply to a row that still has these exact parameters —
+          // one that was edited (or deleted) since this job started simply
+          // doesn't get updated, but the cache write above still benefits
+          // whatever row (or future row) actually has this configuration.
+          const currentSeq = sequencesRef.current.find((s) => s.id === seq.id);
+          if (!currentSeq) return;
+          const currentHash = buildGraphCacheKey(graphParamsFromSequence(currentSeq, baseLength));
+          if (currentHash !== exactHash) return;
+          setRowResult(seq.id, { points, status: 'done', renderInfo });
+        },
+      );
+      backgroundUnsubscribersRef.current[seq.id] = unsubscribe;
+    };
 
-    // GraphCache (see graphCache.js): every input that can change the
-    // chosen generator's output is folded into one deterministic key. A hit
-    // reuses the exact previously computed geometry — regardless of which
-    // renderer originally produced it — with no recomputation at all; a
-    // miss runs whichever generator was just chosen, unchanged, and stores
-    // its result for next time.
-    const cacheKey = buildGraphCacheKey({
+    // STEP 3: the existing adaptive, viewport-scoped preview path —
+    // unchanged from before this feature, including its own cache key and
+    // generator call.
+    const previewCacheKey = buildGraphCacheKey({
       sequenceText: seq.sequenceText, angleA: seq.angleA, angleB: seq.angleB,
       angleStepInput: seq.angleStepInput, baseLength, excludePoint,
-      ...(useBruteForce ? {} : { viewBounds: viewState.bounds, viewportSize: viewState.viewportSize }),
+      viewBounds: viewState.bounds, viewportSize: viewState.viewportSize,
     });
-    const cached = graphCache.get(cacheKey);
-    if (cached) {
-      if (import.meta.env.DEV) console.log(`Renderer: Cache Hit — ${seq.label} (${cached.renderInfo.pointCount} points reused)`);
-      setRowResult(seq.id, { points: cached.points, status: 'done', renderInfo: { ...cached.renderInfo, fromCache: true } });
+    const cachedPreview = graphCache.get(previewCacheKey);
+    if (cachedPreview) {
+      if (import.meta.env.DEV) console.log(`Renderer: Cache Hit (preview) — ${seq.label} (${cachedPreview.renderInfo.pointCount} points reused)`);
+      setRowResult(seq.id, { points: cachedPreview.points, status: 'done', renderInfo: { ...cachedPreview.renderInfo, fromCache: true } });
       finishSlot();
+      startBackgroundExact();
       return;
     }
-    if (import.meta.env.DEV) {
-      const costLabel = `estimated cost ${decision.estimatedSeconds.toFixed(2)}s for ~${decision.estimatedIterations.toLocaleString()} candidates`;
-      console.log(useBruteForce
-        ? `Renderer: Brute Force (${costLabel}) — ${seq.label}`
-        : `Renderer: Adaptive (${costLabel}) — ${seq.label}`);
-    }
+    if (import.meta.env.DEV) console.log(`Renderer: Adaptive — ${seq.label}`);
 
-    // Both generators return the same { promise, cancel } shape and are
-    // driven identically from here on; only their progress/result shapes
-    // differ, normalized below so the rest of this function (and the row
-    // status UI) never needs to know which one actually ran.
-    // generateAngleRegion's onProgress carries `timeLimited` only on its
-    // final ({done: true}) call (see its own module comment on the
-    // MAX_ADAPTIVE_RENDER_MS backstop) — captured here since the resolved
-    // promise itself is just a plain points array with nowhere else to
-    // carry that flag.
-    let bruteForceTimeLimited = false;
-    const task = useBruteForce
-      ? generateAngleRegion({
-          validateCandidate, baseLength, scale: parsed.scale, stepUnits: parsed.stepUnits,
-          onProgress: (p) => {
-            if (p.timeLimited) bruteForceTimeLimited = true;
-            if (jobRequestIdRef.current[seq.id] !== requestId) return;
-            setRowResult(seq.id, { progress: { cellsChecked: p.tested, found: p.found } });
-          },
-        })
-      : generateVisibleAnglePoints({
-          validateCandidate, baseLength, scale: parsed.scale, stepUnits: parsed.stepUnits,
-          viewBounds: viewState.bounds, viewportSize: viewState.viewportSize, zoomLevel: viewState.zoomLevel,
-          excludePoint,
-          onProgress: (p) => {
-            if (jobRequestIdRef.current[seq.id] !== requestId) return;
-            setRowResult(seq.id, { progress: p });
-          },
-        });
+    const task = generateVisibleAnglePoints({
+      validateCandidate, baseLength, scale: parsed.scale, stepUnits: parsed.stepUnits,
+      viewBounds: viewState.bounds, viewportSize: viewState.viewportSize, zoomLevel: viewState.zoomLevel,
+      excludePoint,
+      onProgress: (p) => {
+        if (jobRequestIdRef.current[seq.id] !== requestId) return;
+        setRowResult(seq.id, { progress: p });
+      },
+    });
     jobTaskRef.current[seq.id] = task;
     task.promise.then((result) => {
       if (jobRequestIdRef.current[seq.id] === requestId) {
-        // generateAngleRegion resolves to a plain points array (exact sweep,
-        // no stride/budget concept); generateVisibleAnglePoints resolves to
-        // a richer object. Normalized into one renderInfo shape either way.
-        // `renderer` records which one actually ran — an exact brute-force
-        // result never needs refinement, while an adaptive one is a
-        // viewport-scoped approximation that could be refined toward the
-        // full-resolution grid later; a future background-refinement stage
-        // (see rendererSelection.js's own extension-point comment) can
-        // branch on this without needing any other change here.
-        const points = useBruteForce ? result : result.points;
-        const renderInfo = useBruteForce
-          ? { renderer: RENDERER_MODE.BRUTE_FORCE, zoomLevel: viewState?.zoomLevel, userStepDegrees: parsed.stepDegrees, gridStepDegrees: parsed.stepDegrees, requestedStepDegrees: parsed.stepDegrees, displayScale: displayScaleForStep(parsed.scale), pointCount: points.length, durationMs: performance.now() - startedAt, budgetLimited: false, timeLimited: bruteForceTimeLimited }
-          : { renderer: RENDERER_MODE.ADAPTIVE, zoomLevel: viewState.zoomLevel, userStepDegrees: parsed.stepDegrees, gridStepDegrees: result.effectiveStepDegrees, requestedStepDegrees: result.requestedStepDegrees, displayScale: displayScaleForStep(parsed.scale), pointCount: points.length, durationMs: performance.now() - startedAt, budgetLimited: result.budgetLimited, timeLimited: result.timeLimited };
+        const renderInfo = {
+          renderer: RENDERER_MODE.ADAPTIVE, graphStatus: GRAPH_STATUS.PREVIEW,
+          zoomLevel: viewState.zoomLevel, userStepDegrees: parsed.stepDegrees, gridStepDegrees: result.effectiveStepDegrees,
+          requestedStepDegrees: result.requestedStepDegrees, displayScale: displayScaleForStep(parsed.scale),
+          pointCount: result.points.length, durationMs: performance.now() - startedAt,
+          budgetLimited: result.budgetLimited, timeLimited: result.timeLimited,
+        };
         // A genuinely cancelled/superseded job never reaches here at all —
-        // the requestId check above already guards this whole block — so
-        // anything that does is a real, finished computation worth caching
-        // (including a timeLimited one: it deterministically hit the same
-        // wall-clock cap for this exact key, so reusing it instead of
-        // re-paying that same cost again is the right tradeoff).
-        graphCache.set(cacheKey, { points, renderInfo });
-        setRowResult(seq.id, { points, status: 'done', renderInfo });
+        // the requestId check above already guards this whole block.
+        graphCache.set(previewCacheKey, { points: result.points, renderInfo });
+        setRowResult(seq.id, { points: result.points, status: 'done', renderInfo });
+        finishSlot();
+        startBackgroundExact();
+      } else {
+        finishSlot();
       }
-      finishSlot();
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [baseLength, activeSequenceId, currentPoint.a, currentPoint.b, setRowResult, tryStartNextQueuedJob]);
@@ -450,6 +511,16 @@ export default function AnglePlotWindow({
       for (const id of Object.keys(prevSnapshot)) {
         if (!currentIds.has(id)) {
           cancelSequenceJob(id);
+          // Unlike hiding a row (which keeps listening so an exact upgrade
+          // still lands once it's shown again — see this effect's own
+          // module comment), a deleted row is gone for good: stop listening
+          // for its background exact job so a later-arriving result never
+          // calls setResults for an id that no longer exists. The
+          // underlying job itself (and its eventual GraphCache write) is
+          // untouched — a future row with the same parameters still
+          // benefits from it.
+          backgroundUnsubscribersRef.current[id]?.();
+          delete backgroundUnsubscribersRef.current[id];
           setResults((r) => {
             if (!(id in r)) return r;
             const next = { ...r };
@@ -514,9 +585,15 @@ export default function AnglePlotWindow({
   }, [forceGenerateRequest, sequences]);
 
   // Cancel every outstanding job on unmount so a closed window never calls setState after it stops existing.
+  // Background exact jobs (backgroundExactWorker.js) are only unsubscribed
+  // here, never cancelled: they're keyed by graph hash, not by this window's
+  // lifetime, so they keep running and still populate GraphCache for
+  // whichever row (in this window or a future one) ends up wanting the same
+  // graph next.
   useEffect(() => () => {
     Object.keys(jobTaskRef.current).forEach((id) => jobTaskRef.current[id]?.cancel());
     Object.values(debounceTimersRef.current).forEach((t) => clearTimeout(t));
+    Object.values(backgroundUnsubscribersRef.current).forEach((unsubscribe) => unsubscribe?.());
   }, []);
 
   // AnglePlotPanel reports every zoom/pan/resize here, undebounced. Every
@@ -533,11 +610,14 @@ export default function AnglePlotWindow({
       if (!seq.visible) continue;
       const parsed = parseAngleStep(seq.angleStepInput);
       if (!parsed.valid) continue;
-      // Brute-force rows (rendererSelection.js) always sweep the whole
-      // domain, so their result never depends on the viewport — scheduling
-      // a re-render for one here would only ever re-hit the same GraphCache
-      // entry, so skipping it avoids that pointless work on every pan/zoom.
-      if (chooseRenderer({ scale: parsed.scale, stepUnits: parsed.stepUnits }).mode === RENDERER_MODE.BRUTE_FORCE) continue;
+      // An EXACT row's geometry is the full-domain brute-force sweep, which
+      // never depends on the viewport — scheduling an adaptive re-render for
+      // one here would only ever recompute a worse (preview) approximation
+      // of an answer this row already has permanently, so skip it. A row
+      // still on PREVIEW keeps re-rendering on every pan/zoom exactly as
+      // before, since what's tractable to compute there depends on what's
+      // currently on screen.
+      if (resultsRef.current[seq.id]?.renderInfo?.graphStatus === GRAPH_STATUS.EXACT) continue;
       scheduleRenderForSequence(seq, viewState);
     }
   }, [scheduleRenderForSequence, scheduleWorkspaceReport]);
