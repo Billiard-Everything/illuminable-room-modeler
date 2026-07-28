@@ -92,6 +92,18 @@ export const RENDER_DEBOUNCE_MS = 200;
 // and returns whatever it found so far (see the `timeLimited` result flag).
 export const MAX_ADAPTIVE_RENDER_MS = 6000;
 
+// Wall-clock backstop for the background *exact* brute-force sweep (see
+// backgroundExactWorker.js), passed as generateAngleRegion's own
+// `maxRenderMs` override. Deliberately much larger than
+// MAX_ADAPTIVE_RENDER_MS: that constant protects a render the user is
+// actively waiting on; this one protects a background task the user isn't
+// waiting on at all, so it can be given far more real time before giving
+// up and caching whatever partial result it found (still tagged
+// `timeLimited`, same as the adaptive path) — the goal is "don't run
+// forever and silently burn battery," not "stay within a UI-responsiveness
+// budget."
+export const MAX_BACKGROUND_EXACT_RENDER_MS = 60_000;
+
 // Preload margin, expressed in effective render steps rather than a raw
 // degree value, so points don't visibly pop in/out right at the viewport
 // edge during a pan that hasn't triggered a new render yet.
