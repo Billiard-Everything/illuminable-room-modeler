@@ -33,6 +33,8 @@
 // no backend calls, no worker threads, no background scheduling, no LOD
 // selection logic, no new UI. Those are exactly what Stages 2/3 add.
 
+import { hashGraph } from './graphHasher.js';
+
 // Bumped whenever a change to the adaptive generator itself
 // (visibleAnglePointGenerator.js) or the sampling policy it reads
 // (renderSamplingPolicy.js) would make an old cached entry disagree with
@@ -40,7 +42,11 @@
 // findValidPointInCell, or a change to how stride is chosen. Baking this
 // into the cache key means such a change invalidates every existing entry
 // automatically, without needing to hunt down and clear a live cache by
-// hand.
+// hand. Kept independent from graphHasher.js's own GRAPH_HASH_ALGORITHM_VERSION
+// (which versions the *exact* brute-force algorithm instead): a change to
+// one sampler has no bearing on whether the other's already-cached results
+// are still correct, so tying them together would invalidate one
+// algorithm's cache over a change to the other's.
 export const GRAPH_CACHE_ALGORITHM_VERSION = 1;
 
 // Upper bound on how many finished results this in-memory cache holds at
@@ -52,16 +58,11 @@ export const MAX_CACHE_ENTRIES = 200;
 
 /**
  * Deterministic cache key covering every input that can change the OUTPUT
- * geometry of generateVisibleAnglePoints for a given row:
- *   - the sequence code (exact text, since even whitespace differences are
- *     a different candidate-parsing input)
- *   - Angle A / Angle B
- *   - the Angle Step text (kept as the raw string, not just its numeric
- *     value, since parseAngleStep derives an exact BigInt scale from the
- *     string's own decimal digits — "0.10" and "0.1" are the same number
- *     but different step representations worth keying separately, exactly
- *     like the exact-mode cache this replaces did)
- *   - the shared base triangle length
+ * geometry of generateVisibleAnglePoints for a given row. The graph's own
+ * content identity (code/angles/step/length) is delegated entirely to
+ * graphHasher.js's hashGraph — this function only adds the fields that are
+ * specific to the *viewport-scoped adaptive* result, never part of a
+ * graph's permanent identity:
  *   - the current view (bounds + viewport size): the adaptive renderer's
  *     stride and sampled cells are view-dependent by design (see
  *     calculateSamplingStride in renderSamplingPolicy.js), so two requests
@@ -73,12 +74,6 @@ export const MAX_CACHE_ENTRIES = 200;
  *     computed while one row was active get reused, wrongly, once a
  *     different row becomes active
  *   - GRAPH_CACHE_ALGORITHM_VERSION
- *
- * Deliberately NOT included: the Angle Step spinner's UI increment
- * (angleStepControlIncrementInput in App.jsx). It is a keyboard-arrow nudge
- * amount for the input element only — it never reaches the generator and
- * cannot change its output — so keying on it would only ever fragment the
- * cache for no correctness benefit.
  */
 export const buildGraphCacheKey = ({
   sequenceText, angleA, angleB, angleStepInput, baseLength, viewBounds, viewportSize, excludePoint,
@@ -90,12 +85,8 @@ export const buildGraphCacheKey = ({
   const viewportKey = viewportSize ? `${num(viewportSize.width)}x${num(viewportSize.height)}` : '0x0';
   const excludeKey = excludePoint ? `excl(${num(excludePoint.a)},${num(excludePoint.b)})` : 'excl(none)';
   return [
-    `alg${GRAPH_CACHE_ALGORITHM_VERSION}`,
-    `code(${sequenceText})`,
-    `a(${num(angleA)})`,
-    `b(${num(angleB)})`,
-    `step(${angleStepInput})`,
-    `len(${num(baseLength)})`,
+    hashGraph({ sequenceText, angleA, angleB, angleStepInput, baseLength }),
+    `previewAlg${GRAPH_CACHE_ALGORITHM_VERSION}`,
     `view(${boundsKey})`,
     `viewport(${viewportKey})`,
     excludeKey,

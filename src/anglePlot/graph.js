@@ -17,31 +17,31 @@
 // change shape to support it.
 //
 // `params` (sequenceText/angleA/angleB/angleStepInput/baseLength) plus
-// `hash` (graphCache.js's buildGraphCacheKey computed *without* a viewport
-// — see AnglePlotWindow.jsx's own exactHash) together are a graph's stable,
-// content-only identity: two rows with identical params always share the
-// same hash, the same GraphCache entry, and the same background exact job
-// (see backgroundExactWorker.js) — never two independent computations of
-// the same answer.
+// `hash` (graphHasher.js's hashGraph — see AnglePlotWindow.jsx's own
+// exactHash) together are a graph's stable, content-only identity: two rows
+// with identical params always share the same hash, the same GraphCache
+// entry, and the same background exact job (see backgroundExactWorker.js)
+// — never two independent computations of the same answer.
 //
-// Database extension point (explicit non-goal for now, not implemented)
+// Database extension point (see server/repositories/graphRepository.js)
 // -------------------------------------------------------------------------
-// A Graph's shape here is already exactly what a future `graphs` table row
-// would look like: `hash` as a unique/primary key, `params` as the columns
-// (or a jsonb blob) that produced it, `geometry` as the stored payload, and
-// `status` as a plain enum column. Nothing in AnglePlotWindow.jsx needs to
-// know that toGraph() currently reads from an in-memory `results` map
-// instead of a database row — swapping the *source* this projects from is
-// the only thing a future persistent-storage stage would need to change.
+// A Graph's shape here is already exactly what the `graphs` table row looks
+// like: `hash` (graphHasher.js's hashGraph output) as the unique/primary
+// key, `params` as the columns that produced it, `geometry` as the stored
+// payload (see the `graph_geometry` table), and `status` as a plain enum
+// column. Nothing in AnglePlotWindow.jsx needs to know that toGraph()
+// currently reads from an in-memory `results` map instead of a database row
+// — swapping the *source* this projects from is the only thing wiring up
+// that repository would need to change here.
 
 import { GRAPH_STATUS } from './graphStatus.js';
 
 /**
  * Builds the plain `{sequenceText, angleA, angleB, angleStepInput,
  * baseLength}` parameter set that defines a graph's identity — the same
- * shape buildGraphCacheKey (graphCache.js) hashes to produce a graph's
- * `hash`, kept as one function so nothing ever has to list these five
- * fields out by hand a second time.
+ * shape graphHasher.js's hashGraph hashes to produce a graph's `hash`, kept
+ * as one function so nothing ever has to list these five fields out by
+ * hand a second time.
  */
 export const graphParamsFromSequence = (seq, baseLength) => ({
   sequenceText: seq.sequenceText,

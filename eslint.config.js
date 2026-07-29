@@ -16,7 +16,12 @@ export default defineConfig([
   // Apply these rules to JavaScript and JSX source/config files.
   {
     // Match the current project language set; there is no TypeScript here.
+    // server/** is excluded here and covered by its own Node-targeted block
+    // below instead — it's plain Node code (PostgreSQL scaffolding, never
+    // bundled by Vite), not browser/React code, so it has no business with
+    // browser globals or the React Hooks/Refresh rules.
     files: ['**/*.{js,jsx}'],
+    ignores: ['server/**'],
     // Compose general JS, React Hooks, and Vite React Refresh recommendations.
     extends: [
       js.configs.recommended,
@@ -31,6 +36,16 @@ export default defineConfig([
     // Rest-sibling destructuring (`const { drop, ...rest } = obj`) is the
     // idiomatic way to omit a key before passing the remainder along; the
     // dropped binding is never meant to be read.
+    rules: { 'no-unused-vars': ['error', { ignoreRestSiblings: true }] },
+  },
+  // server/**: plain Node (PostgreSQL scaffolding — see
+  // server/repositories/graphRepository.js's own module comment). Node
+  // globals, no JSX, and none of the browser-only React Hooks/Refresh
+  // rules apply here.
+  {
+    files: ['server/**/*.js'],
+    extends: [js.configs.recommended],
+    languageOptions: { globals: globals.node },
     rules: { 'no-unused-vars': ['error', { ignoreRestSiblings: true }] },
   },
 ])
