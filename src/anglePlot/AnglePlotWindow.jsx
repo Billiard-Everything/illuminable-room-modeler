@@ -8,6 +8,7 @@ import { parseAngleStep, displayScaleForStep } from './angleStep.js';
 import { RENDER_DEBOUNCE_MS, MAX_BACKGROUND_EXACT_RENDER_MS } from './renderSamplingPolicy.js';
 import { truncateSequenceText } from '../sequences/sequenceGraphConfig.js';
 import { graphCache, buildGraphCacheKey } from './graphCache.js';
+import { hashGraph } from './graphHasher.js';
 import {
   requestExactComputation, isExactComputationRunning, updateBackgroundJobPriority,
   getBackgroundJobState, JOB_PRIORITY,
@@ -377,10 +378,14 @@ export default function AnglePlotWindow({
     setRowResult(seq.id, { status: 'running', error: null, progress: { cellsChecked: 0, found: 0 } });
 
     // A graph's exact identity never depends on the viewport or on which
-    // row happens to be active — see graph.js's own comment on why
-    // `excludePoint` (a display-only concern) is deliberately excluded here
-    // even though the adaptive/preview cache key below still includes it.
-    const exactHash = buildGraphCacheKey(graphParamsFromSequence(seq, baseLength));
+    // row happens to be active — see graphHasher.js's own comment on why
+    // `excludePoint` (a display-only concern), like zoom/pan, is
+    // deliberately excluded here even though the adaptive/preview cache key
+    // below still includes it. This is also the permanent identifier a
+    // future PostgreSQL-backed cache would look a graph up by (see
+    // server/repositories/graphRepository.js), so every exact-identity hash
+    // in this file goes through hashGraph, never a one-off computation.
+    const exactHash = hashGraph(graphParamsFromSequence(seq, baseLength));
 
     // STEP 2: an exact hit is final and needs nothing further — no
     // adaptive preview, no background job, no further cache writes.
@@ -476,7 +481,7 @@ export default function AnglePlotWindow({
           // when it's actually still the row that asked for it.
           const currentSeq = sequencesRef.current.find((s) => s.id === seq.id);
           if (!currentSeq) return;
-          const currentHash = buildGraphCacheKey(graphParamsFromSequence(currentSeq, baseLength));
+          const currentHash = hashGraph(graphParamsFromSequence(currentSeq, baseLength));
           if (currentHash !== exactHash) return;
           setRowResult(seq.id, { points, status: 'done', renderInfo });
         },
