@@ -17,6 +17,23 @@ const createFakePool = (rows = []) => {
   };
 };
 
+// A fake pool returning a different, pre-scripted response per call, in
+// order — needed for methods like uploadExactGraphIfMissing that make
+// several distinct queries (each expecting its own row shape back).
+const createSequencedFakePool = (responses) => {
+  const calls = [];
+  let i = 0;
+  return {
+    calls,
+    query: async (text, queryParams) => {
+      calls.push({ text, params: queryParams });
+      const response = responses[Math.min(i, responses.length - 1)];
+      i += 1;
+      return response;
+    },
+  };
+};
+
 const params = () => ({ sequenceText: '3 1 7 2 6 2 8 2 4 2', angleA: 15, angleB: 50, angleStepInput: '0.1', baseLength: 90 });
 
 test('findByHash queries by hash and maps a found row to a Graph model', async () => {
@@ -139,4 +156,90 @@ test('updateJobStatus returns null if no job matched the id', async () => {
   const pool = createFakePool([]);
   const repo = createGraphRepository(pool);
   assert.equal(await repo.updateJobStatus('missing', { status: 'failed' }), null);
+});
+
+// --- graphExists / getGraphWithGeometry / uploadExactGraphIfMissing -------
+
+test('graphExists returns true when a row is found, false otherwise', async () => {
+  const existsPool = createFakePool([{ '?column?': 1 }]);
+  assert.equal(await createGraphRepository(existsPool).graphExists('hash-abc'), true);
+  assert.match(existsPool.calls[0].text, /SELECT 1 FROM graphs WHERE hash = \$1/);
+  assert.deepEqual(existsPool.calls[0].params, ['hash-abc']);
+
+  const missingPool = createFakePool([]);
+  assert.equal(await createGraphRepository(missingPool).graphExists('hash-abc'), false);
+});
+
+test('getGraphWithGeometry joins graphs and graph_geometry and maps both models from one row', async () => {
+  const row = {
+    id: 'graph-1', hash: 'hash-abc', sequence_text: '3 1 7 2 6 2 8 2 4 2',
+    angle_a: 15, angle_b: 50, angle_step_input: '0.1', base_length: 90,
+    algorithm_version: 1, owner_user_id: null, created_at: 'g-created', updated_at: 'g-updated',
+    geometry_id: 'geo-1', points: [{ a: 1, b: 2 }], point_count: 1, geometry_status: 'exact',
+    duration_ms: 999, geometry_created_at: 'geo-created', geometry_updated_at: 'geo-updated',
+  };
+  const pool = createFakePool([row]);
+  const repo = createGraphRepository(pool);
+
+  const result = await repo.getGraphWithGeometry('hash-abc');
+
+  assert.match(pool.calls[0].text, /JOIN graph_geometry/);
+  assert.deepEqual(pool.calls[0].params, ['hash-abc']);
+  assert.deepEqual(result.graph, {
+    id: 'graph-1', hash: 'hash-abc',
+    params: { sequenceText: '3 1 7 2 6 2 8 2 4 2', angleA: 15, angleB: 50, angleStepInput: '0.1', baseLength: 90 },
+    algorithmVersion: 1, ownerUserId: null, createdAt: 'g-created', updatedAt: 'g-updated',
+  });
+  assert.deepEqual(result.geometry, {
+    id: 'geo-1', graphId: 'graph-1', points: [{ a: 1, b: 2 }], pointCount: 1,
+    status: 'exact', durationMs: 999, createdAt: 'geo-created', updatedAt: 'geo-updated',
+  });
+});
+
+test('getGraphWithGeometry returns null when the hash has never been stored', async () => {
+  const pool = createFakePool([]);
+  const repo = createGraphRepository(pool);
+  assert.equal(await repo.getGraphWithGeometry('missing-hash'), null);
+});
+
+test('uploadExactGraphIfMissing checks graphExists first and skips the insert when the hash is already stored', async () => {
+  const pool = createFakePool([{ '?column?': 1 }]); // graphExists -> true
+  const repo = createGraphRepository(pool);
+
+  const result = await repo.uploadExactGraphIfMissing({ params: params(), points: [{ a: 1, b: 2 }], durationMs: 100 });
+
+  assert.deepEqual(result, { uploaded: false });
+  assert.equal(pool.calls.length, 1, 'must never insert anything once graphExists says it is already stored');
+  assert.match(pool.calls[0].text, /SELECT 1 FROM graphs/);
+});
+
+test('uploadExactGraphIfMissing saves graph metadata and geometry together when the hash is new', async () => {
+  const graphRow = {
+    id: 'graph-1', hash: hashGraph(params()), sequence_text: params().sequenceText,
+    angle_a: 15, angle_b: 50, angle_step_input: '0.1', base_length: 90,
+    algorithm_version: GRAPH_HASH_ALGORITHM_VERSION, owner_user_id: null, created_at: 'x', updated_at: 'y',
+  };
+  const geometryRow = {
+    id: 'geo-1', graph_id: 'graph-1', points: [{ a: 1, b: 2 }], point_count: 1, status: 'exact', duration_ms: 100, created_at: 'x', updated_at: 'y',
+  };
+  // Call order: graphExists (empty -> false), upsertGraph (-> graphRow), saveGeometry (-> geometryRow).
+  const pool = createSequencedFakePool([{ rows: [] }, { rows: [graphRow] }, { rows: [geometryRow] }]);
+  const repo = createGraphRepository(pool);
+
+  const result = await repo.uploadExactGraphIfMissing({ params: params(), points: [{ a: 1, b: 2 }], durationMs: 100 });
+
+  assert.equal(result.uploaded, true);
+  assert.equal(result.graph.hash, hashGraph(params()));
+  assert.equal(result.geometry.pointCount, 1);
+  assert.equal(pool.calls.length, 3);
+  assert.match(pool.calls[0].text, /SELECT 1 FROM graphs/);
+  assert.match(pool.calls[1].text, /INSERT INTO graphs/);
+  assert.match(pool.calls[2].text, /INSERT INTO graph_geometry/);
+});
+
+test('uploadExactGraphIfMissing computes the hash via graphHasher, never independently', async () => {
+  const pool = createFakePool([{ '?column?': 1 }]);
+  const repo = createGraphRepository(pool);
+  await repo.uploadExactGraphIfMissing({ params: params(), points: [], durationMs: null });
+  assert.equal(pool.calls[0].params[0], hashGraph(params()));
 });

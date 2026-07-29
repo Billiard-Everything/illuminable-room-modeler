@@ -12,18 +12,19 @@
 // is a deployment/ops concern, not the business-logic graph queries this
 // rule is actually about.)
 //
-// Not wired into the browser app (see the task this file was built for:
-// "set up PostgreSQL architecture, do NOT migrate functionality yet")
+// Reached from the browser through server/api/** only (Phase 5)
 // -------------------------------------------------------------------------
-// Nothing in src/** imports this file, and nothing here is called from the
-// running app. This is architecture scaffolding for a future shared graph
-// library server — a real Postgres connection isn't even reachable from a
-// browser tab; a server process using this repository, sitting behind an
-// API src/** would call over HTTP, is the piece that doesn't exist yet.
-// When it does, GraphCache's own Stage 3 comment (src/anglePlot/graphCache.js)
-// already describes the shape that integration takes: the browser's
-// GraphCache.get/set interface stays the same, and only what's *behind* it
-// changes to an async call into that future API.
+// A browser tab can't open a raw Postgres connection at all — TCP sockets
+// aren't available to it — so server/api/app.js is the thin HTTP layer that
+// src/anglePlot/remoteGraphRepository.js's fetch calls actually hit; that
+// route handler is the *only* caller of this file from outside server/**.
+// Nothing in src/** imports this file directly, and rendering code still
+// never executes SQL, exactly as this module's own header rule requires —
+// it just now has exactly one caller (the API layer) instead of zero.
+// GraphCache's own Stage 3 comment (src/anglePlot/graphCache.js) describes
+// the browser-side shape this integration takes: GraphCache.get/set stays
+// the same interface, with a remote lookup/upload now sitting behind a
+// GraphCache miss instead of the whole feature not existing yet.
 //
 // Every method takes a `hash` produced by src/anglePlot/graphHasher.js's
 // hashGraph — the same permanent identity the in-memory GraphCache and the
@@ -32,6 +33,7 @@
 
 import { getPool } from '../db/pool.js';
 import { hashGraph, GRAPH_HASH_ALGORITHM_VERSION } from '../../src/anglePlot/graphHasher.js';
+import { GRAPH_STATUS } from '../../src/anglePlot/graphStatus.js';
 import { graphRowToModel } from '../models/graph.js';
 import { geometryRowToModel } from '../models/geometry.js';
 
@@ -88,6 +90,74 @@ export const createGraphRepository = (pool) => ({
       [graphId, JSON.stringify(points), points.length, status, durationMs],
     );
     return geometryRowToModel(rows[0]);
+  },
+
+  /**
+   * Whether a graph with this hash has ever been stored — no geometry, no
+   * row contents, just existence. Used by the upload pipeline's own
+   * pre-check (see uploadExactGraphIfMissing) and available to any future
+   * caller that only needs a yes/no answer without paying for a full row
+   * fetch.
+   */
+  async graphExists(hash) {
+    const { rows } = await pool.query('SELECT 1 FROM graphs WHERE hash = $1', [hash]);
+    return rows.length > 0;
+  },
+
+  /**
+   * The download pipeline's one call: graph *and* its geometry in a single
+   * round trip (an INNER JOIN), rather than findByHash followed by a
+   * separate getGeometry — avoiding the unnecessary second database call
+   * this task explicitly asks to avoid. The INNER JOIN also means a graph
+   * row that somehow exists without geometry yet (shouldn't normally
+   * happen — see saveGeometry/uploadExactGraphIfMissing, which always
+   * write both together) is correctly treated as "no exact graph
+   * available" rather than a partial/broken result.
+   *
+   * @returns {{graph, geometry}|null}
+   */
+  async getGraphWithGeometry(hash) {
+    const { rows } = await pool.query(
+      `SELECT
+         g.*,
+         gg.id AS geometry_id, gg.points, gg.point_count, gg.status AS geometry_status,
+         gg.duration_ms, gg.created_at AS geometry_created_at, gg.updated_at AS geometry_updated_at
+       FROM graphs g
+       JOIN graph_geometry gg ON gg.graph_id = g.id
+       WHERE g.hash = $1`,
+      [hash],
+    );
+    const row = rows[0];
+    if (!row) return null;
+    return {
+      graph: graphRowToModel(row),
+      geometry: {
+        id: row.geometry_id, graphId: row.id, points: row.points, pointCount: row.point_count,
+        status: row.geometry_status, durationMs: row.duration_ms,
+        createdAt: row.geometry_created_at, updatedAt: row.geometry_updated_at,
+      },
+    };
+  },
+
+  /**
+   * The upload pipeline's one call: stores a freshly-computed exact graph
+   * only if this hash has never been stored before ("duplicate uploads
+   * never occur" — see this task's own test list). Graph metadata and
+   * geometry are saved together, since a graph row is never meant to exist
+   * here without its geometry (see getGraphWithGeometry's own comment) —
+   * there is no reason a caller would ever want one without the other.
+   *
+   * @returns {{uploaded: boolean, graph?, geometry?}} `uploaded` is false
+   *   (with no graph/geometry) when the hash already existed — the caller
+   *   (see AnglePlotWindow.jsx) treats this exactly the same as a
+   *   successful upload: either way, the shared library now has it.
+   */
+  async uploadExactGraphIfMissing({ params, algorithmVersion = GRAPH_HASH_ALGORITHM_VERSION, ownerUserId = null, points, durationMs = null }) {
+    const hash = hashGraph(params);
+    if (await this.graphExists(hash)) return { uploaded: false };
+    const graph = await this.upsertGraph({ params, ownerUserId, algorithmVersion });
+    const geometry = await this.saveGeometry(graph.id, { points, status: GRAPH_STATUS.EXACT, durationMs });
+    return { uploaded: true, graph, geometry };
   },
 
   /** Records a new background job request for a graph, in 'queued' status. */
