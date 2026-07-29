@@ -18,17 +18,28 @@
 // row that was hidden and re-shown — just subscribes to the one already
 // running.
 //
-// Lifecycle independence
-// -------------------------
-// A job is tied to a *hash*, never to the row(s) that happened to trigger
-// it. If every subscribed row is deleted or edited to a different
-// configuration before the job finishes, the job still runs to completion
-// and still populates GraphCache — a future row (or a future session, once
-// a persistent backend replaces the in-memory cache) with the same exact
-// parameters still benefits from it. requestExactComputation returns an
-// unsubscribe function precisely so a caller can stop listening (e.g. on
-// unmount, to avoid calling setState on a gone component) without
-// cancelling the underlying computation for anyone else still interested.
+// Lifecycle independence, and cancellation
+// -------------------------------------------
+// A job is tied to a *hash*, never to any single row — while two or more
+// rows share identical parameters, both stay subscribed to the one running
+// job, and neither's edit/deletion affects the other. requestExactComputation
+// returns an unsubscribe function precisely so a caller can stop listening
+// (on edit, deletion, or unmount) without necessarily disturbing anyone else
+// still interested.
+//
+// But once the *last* subscriber for a hash unsubscribes — the common case
+// of a single row being edited, deleted, or its window closed — the job is
+// genuinely orphaned: nothing will ever read its result. Continuing to spend
+// CPU on it would violate this feature's own requirement that "an outdated
+// computation must immediately stop" and "a cancelled job must never write
+// to GraphCache," so the last unsubscribe both cancels the underlying task
+// (generateAngleRegion.js's own cooperative cancellation — see its
+// `cancelled` flag, checked once per chunk) and evicts the job from this
+// registry immediately, rather than waiting for the cancelled task to
+// actually finish unwinding. Evicting immediately (not on eventual
+// settlement) matters: a *new* request for the same hash arriving right
+// after must start a fresh computation, not join a job that's already on
+// its way out with no one left to deliver a result to.
 //
 // Extension point for Stage 3 (persistent storage, not implemented here)
 // ---------------------------------------------------------------------------
@@ -59,8 +70,10 @@ const activeJobs = new Map();
  *   is generateAngleRegion's resolved array; `error` is set instead if the
  *   computation itself threw.
  * @returns {() => void} unsubscribe — stops `onResult` from being called
- *   for this particular caller; does not cancel the job for any other
- *   subscriber.
+ *   for this particular caller. If this was the last remaining subscriber
+ *   for this hash, also cancels the underlying computation and evicts it
+ *   from the registry (see the module comment above); with other
+ *   subscribers still present, the job is left running for them untouched.
  */
 export const requestExactComputation = (hash, computeFn, onResult) => {
   let job = activeJobs.get(hash);
@@ -70,17 +83,32 @@ export const requestExactComputation = (hash, computeFn, onResult) => {
     activeJobs.set(hash, job);
     task.promise.then(
       (points) => {
-        activeJobs.delete(hash);
+        // A cancelled job is evicted synchronously by its last unsubscribe
+        // (below), well before it actually settles — so by the time this
+        // runs, `activeJobs.get(hash)` no longer points at `job` (it's
+        // either gone, or a brand-new job for a later request of the same
+        // hash). Guarding on identity here, not just presence, means this
+        // never deletes a newer job that happens to share the hash, and
+        // `job.subscribers` is already empty in the cancelled case, so the
+        // forEach below is naturally a no-op — no update ever reaches the
+        // UI or GraphCache for a cancelled computation.
+        if (activeJobs.get(hash) === job) activeJobs.delete(hash);
         job.subscribers.forEach((subscriber) => subscriber(points, null));
       },
       (error) => {
-        activeJobs.delete(hash);
+        if (activeJobs.get(hash) === job) activeJobs.delete(hash);
         job.subscribers.forEach((subscriber) => subscriber(null, error));
       },
     );
   }
   job.subscribers.add(onResult);
-  return () => job.subscribers.delete(onResult);
+  return () => {
+    job.subscribers.delete(onResult);
+    if (job.subscribers.size === 0 && activeJobs.get(hash) === job) {
+      job.task.cancel();
+      activeJobs.delete(hash);
+    }
+  };
 };
 
 /** True while a background exact computation for `hash` is in flight. */

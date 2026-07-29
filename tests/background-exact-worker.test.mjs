@@ -4,11 +4,19 @@ import { requestExactComputation, isExactComputationRunning, _resetForTests } fr
 
 // A controllable task: resolve()/reject() are exposed so tests can decide
 // exactly when the "computation" finishes, instead of racing real timers.
+// `cancelCalls` tracks how many times `cancel()` was invoked, so tests can
+// assert the real cancellation behavior (not just registry bookkeeping).
 const deferredTask = () => {
   let resolve;
   let reject;
+  let cancelCalls = 0;
   const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
-  return { task: { promise, cancel: () => {} }, resolve, reject };
+  return {
+    task: { promise, cancel: () => { cancelCalls += 1; } },
+    resolve,
+    reject,
+    get cancelCalls() { return cancelCalls; },
+  };
 };
 
 test.beforeEach(() => _resetForTests());
@@ -60,12 +68,59 @@ test('a rejected computation notifies subscribers with the error, not a thrown e
 });
 
 test('unsubscribe stops that caller from being notified without affecting other subscribers', async () => {
-  const { task, resolve } = deferredTask();
+  const job = deferredTask();
+  const { task, resolve } = job;
   const seen = [];
   const unsubscribe = requestExactComputation('hash-a', () => task, () => seen.push('first'));
   requestExactComputation('hash-a', () => task, () => seen.push('second'));
   unsubscribe();
+  assert.equal(job.cancelCalls, 0, 'a job with a remaining subscriber must not be cancelled');
+  assert.equal(isExactComputationRunning('hash-a'), true);
   resolve([]);
+  await task.promise;
+  await Promise.resolve();
+  assert.deepEqual(seen, ['second']);
+});
+
+test('unsubscribing the last remaining subscriber cancels the underlying task and evicts the job', () => {
+  const job = deferredTask();
+  const unsubscribe = requestExactComputation('hash-a', () => job.task, () => {});
+  assert.equal(isExactComputationRunning('hash-a'), true);
+  unsubscribe();
+  assert.equal(job.cancelCalls, 1, 'the last unsubscribe must cancel the underlying computation');
+  assert.equal(isExactComputationRunning('hash-a'), false, 'a cancelled job must be evicted from the registry immediately');
+});
+
+test('a cancelled job never notifies its own (now-unsubscribed) caller once it eventually settles', async () => {
+  const { task, resolve } = deferredTask();
+  let called = false;
+  const unsubscribe = requestExactComputation('hash-a', () => task, () => { called = true; });
+  unsubscribe();
+  resolve(['late', 'result']);
+  await task.promise;
+  await Promise.resolve();
+  assert.equal(called, false, 'a cancelled computation must never update the caller that cancelled it');
+});
+
+test('after the last subscriber cancels a job, a new request for the same hash starts a fresh computation rather than joining the cancelled one', () => {
+  const first = deferredTask();
+  const second = deferredTask();
+  let calls = 0;
+  const unsubscribe = requestExactComputation('hash-a', () => { calls += 1; return first.task; }, () => {});
+  unsubscribe();
+  requestExactComputation('hash-a', () => { calls += 1; return second.task; }, () => {});
+  assert.equal(calls, 2, 'a cancelled+evicted job must never be joined by a later request for the same hash');
+});
+
+test('cancelling one subscriber of a shared job leaves it running for the remaining subscriber, which still gets notified', async () => {
+  const job = deferredTask();
+  const { task, resolve } = job;
+  const seen = [];
+  const unsubscribeFirst = requestExactComputation('hash-a', () => task, () => seen.push('first'));
+  requestExactComputation('hash-a', () => task, () => seen.push('second'));
+  unsubscribeFirst();
+  assert.equal(job.cancelCalls, 0);
+  resolve(['p']);
   await task.promise;
   await Promise.resolve();
   assert.deepEqual(seen, ['second']);

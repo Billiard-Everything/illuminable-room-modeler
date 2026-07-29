@@ -220,11 +220,30 @@ export default function AnglePlotWindow({
   const jobRequestIdRef = useRef({}); // id -> number, bumped on every (re)start or cancel
   const runningIdsRef = useRef(new Set());
   // id -> unsubscribe function for that row's currently-pending background
-  // exact job listener (see backgroundExactWorker.js). The job itself keeps
-  // running (and still caches its result) even after this is called — this
-  // only stops it from calling setRowResult for a row that's since been
-  // deleted or edited away from the hash it subscribed to.
+  // exact job listener, and id -> the hash it's listening to (the latter
+  // purely so stopListeningForBackgroundExact below can log whether this
+  // row's unsubscribe was the one that actually cancelled the job, vs. one
+  // of several subscribers on a still-wanted job). See
+  // backgroundExactWorker.js's own module comment: since its last
+  // subscriber's unsubscribe now cancels the underlying computation and
+  // evicts it from the registry, calling this for a row that's being
+  // edited/deleted/unmounted is what satisfies "an outdated computation
+  // must immediately stop" — a job with other subscribers still keeps
+  // running for them, untouched.
   const backgroundUnsubscribersRef = useRef({});
+  const backgroundJobHashRef = useRef({});
+  const stopListeningForBackgroundExact = useCallback((id, label) => {
+    const previousHash = backgroundJobHashRef.current[id];
+    const unsubscribe = backgroundUnsubscribersRef.current[id];
+    delete backgroundUnsubscribersRef.current[id];
+    delete backgroundJobHashRef.current[id];
+    if (!unsubscribe) return;
+    const wasRunning = previousHash ? isExactComputationRunning(previousHash) : false;
+    unsubscribe();
+    if (import.meta.env.DEV && wasRunning && previousHash && !isExactComputationRunning(previousHash)) {
+      console.log(`Renderer: Background Exact cancelled (superseded) — ${label}`);
+    }
+  }, []);
   const pendingQueueRef = useRef([]); // [{ seq, viewState }]
   const lastViewStateRef = useRef(null);
   const prevSequenceSnapshotRef = useRef({}); // id -> { sequenceText, angleStepInput, visible }
@@ -355,12 +374,24 @@ export default function AnglePlotWindow({
     // path and the freshly-computed-preview path below so neither has to
     // duplicate this.
     const startBackgroundExact = () => {
+      // This row can be re-scheduled for reasons that never actually change
+      // its exact hash — e.g. a view/fit change re-running the *adaptive*
+      // preview after the panel auto-fits to a fresh (but content-identical)
+      // result — and each of those still reaches this same point. If the
+      // row is already subscribed to this exact hash's job, there is
+      // nothing stale to cancel: unsubscribing and immediately
+      // resubscribing here would needlessly cancel-and-restart an already-
+      // correct, still-running computation for no reason, discarding
+      // whatever progress it had made. Only when the hash has genuinely
+      // changed is the previous subscription actually stale.
+      if (backgroundJobHashRef.current[seq.id] === exactHash) return;
       // A previous background job this row was subscribed to (e.g. a
       // still-in-flight sweep for whatever this row's *last* configuration
       // was) is no longer relevant to this row once it's been replotted
-      // under a new hash — stop listening to it so its eventual result
-      // can't land on this row instead of the one it belongs to.
-      backgroundUnsubscribersRef.current[seq.id]?.();
+      // under a new hash — stop listening to it, which cancels it outright
+      // if this row was its only remaining subscriber (see
+      // backgroundExactWorker.js and stopListeningForBackgroundExact above).
+      stopListeningForBackgroundExact(seq.id, seq.label);
       const alreadyRunning = isExactComputationRunning(exactHash);
       if (import.meta.env.DEV) {
         console.log(alreadyRunning
@@ -387,16 +418,20 @@ export default function AnglePlotWindow({
             displayScale: displayScaleForStep(parsed.scale), pointCount: points.length,
             durationMs: performance.now() - bgStartedAt, budgetLimited: false, timeLimited: bgTimeLimited,
           };
-          // Cached for every future request of this exact graph — including
-          // ones App.jsx's own workspace-restore path or a completely
-          // different row will make later — regardless of whether any row
-          // currently on screen still matches it.
+          // This callback only ever runs for a job that reached a genuine
+          // finish, not a cancelled one: if this row was the *only*
+          // subscriber, editing/deleting it already cancelled and evicted
+          // the job via stopListeningForBackgroundExact above, and a
+          // cancelled job's subscriber set is empty by the time it settles
+          // (see backgroundExactWorker.js), so this simply never fires for
+          // it. Reaching here means either this row is still current, or a
+          // *different* still-live row shares this exact hash — either way
+          // the cache write below is safe and useful.
           graphCache.set(exactHash, { points, renderInfo });
           if (import.meta.env.DEV) console.log(`Renderer: Background Exact complete — ${seq.label} (${points.length} points, ${renderInfo.durationMs.toFixed(0)}ms)`);
-          // Only apply to a row that still has these exact parameters —
-          // one that was edited (or deleted) since this job started simply
-          // doesn't get updated, but the cache write above still benefits
-          // whatever row (or future row) actually has this configuration.
+          // Still guard the *display* update on this row's own current
+          // params, since a shared job's result is only this row's to show
+          // when it's actually still the row that asked for it.
           const currentSeq = sequencesRef.current.find((s) => s.id === seq.id);
           if (!currentSeq) return;
           const currentHash = buildGraphCacheKey(graphParamsFromSequence(currentSeq, baseLength));
@@ -405,6 +440,7 @@ export default function AnglePlotWindow({
         },
       );
       backgroundUnsubscribersRef.current[seq.id] = unsubscribe;
+      backgroundJobHashRef.current[seq.id] = exactHash;
     };
 
     // STEP 3: the existing adaptive, viewport-scoped preview path —
@@ -515,12 +551,12 @@ export default function AnglePlotWindow({
           // still lands once it's shown again — see this effect's own
           // module comment), a deleted row is gone for good: stop listening
           // for its background exact job so a later-arriving result never
-          // calls setResults for an id that no longer exists. The
-          // underlying job itself (and its eventual GraphCache write) is
-          // untouched — a future row with the same parameters still
-          // benefits from it.
-          backgroundUnsubscribersRef.current[id]?.();
-          delete backgroundUnsubscribersRef.current[id];
+          // calls setResults for an id that no longer exists — and, if this
+          // row was the job's last subscriber, this cancels the underlying
+          // computation outright (see stopListeningForBackgroundExact and
+          // backgroundExactWorker.js), satisfying "deleting a graph cancels
+          // its brute-force computation."
+          stopListeningForBackgroundExact(id, id);
           setResults((r) => {
             if (!(id in r)) return r;
             const next = { ...r };
@@ -584,17 +620,17 @@ export default function AnglePlotWindow({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [forceGenerateRequest, sequences]);
 
-  // Cancel every outstanding job on unmount so a closed window never calls setState after it stops existing.
-  // Background exact jobs (backgroundExactWorker.js) are only unsubscribed
-  // here, never cancelled: they're keyed by graph hash, not by this window's
-  // lifetime, so they keep running and still populate GraphCache for
-  // whichever row (in this window or a future one) ends up wanting the same
-  // graph next.
+  // Cancel every outstanding job on unmount so a closed window never calls
+  // setState after it stops existing. Background exact jobs are stopped via
+  // stopListeningForBackgroundExact, same as a row deletion: a hash with no
+  // other subscriber left anywhere is cancelled outright (see
+  // backgroundExactWorker.js); one still shared with another still-open
+  // window/row is merely left running for that other subscriber.
   useEffect(() => () => {
     Object.keys(jobTaskRef.current).forEach((id) => jobTaskRef.current[id]?.cancel());
     Object.values(debounceTimersRef.current).forEach((t) => clearTimeout(t));
-    Object.values(backgroundUnsubscribersRef.current).forEach((unsubscribe) => unsubscribe?.());
-  }, []);
+    Object.keys(backgroundUnsubscribersRef.current).forEach((id) => stopListeningForBackgroundExact(id, id));
+  }, [stopListeningForBackgroundExact]);
 
   // AnglePlotPanel reports every zoom/pan/resize here, undebounced. Every
   // currently visible row gets a debounced re-render, since the adaptive
