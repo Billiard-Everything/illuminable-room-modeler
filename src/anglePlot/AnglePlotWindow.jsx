@@ -8,7 +8,8 @@ import { parseAngleStep, displayScaleForStep } from './angleStep.js';
 import { RENDER_DEBOUNCE_MS, MAX_BACKGROUND_EXACT_RENDER_MS } from './renderSamplingPolicy.js';
 import { truncateSequenceText } from '../sequences/sequenceGraphConfig.js';
 import { graphCache, buildGraphCacheKey } from './graphCache.js';
-import { hashGraph } from './graphHasher.js';
+import { hashGraph, GRAPH_HASH_ALGORITHM_VERSION } from './graphHasher.js';
+import { fetchRemoteExactGraph, uploadRemoteExactGraph } from './remoteGraphRepository.js';
 import {
   requestExactComputation, isExactComputationRunning, updateBackgroundJobPriority,
   getBackgroundJobState, JOB_PRIORITY,
@@ -265,6 +266,22 @@ export default function AnglePlotWindow({
   // comment above). Never cleared on delete: a deleted row's id isn't
   // reused, so a stale entry is inert, not a correctness risk.
   const everRequestedExactIdsRef = useRef(new Set());
+  // Exact hashes already confirmed absent from the shared PostgreSQL
+  // library this session (see remoteGraphRepository.js) — checked at most
+  // once per hash so a row still on PREVIEW status doesn't re-query it on
+  // every pan/zoom-driven re-render (handleViewChange keeps rescheduling
+  // non-EXACT rows exactly as before). A hash that later gets uploaded by
+  // this same session's own background-exact completion never needs this
+  // invalidated: that upload's own local GraphCache.set happens first, so
+  // any row sharing that hash hits GraphCache (STEP 2) before ever
+  // reaching this set's check again.
+  const remoteMissesRef = useRef(new Set());
+  // Exact hashes this session has already attempted to upload — set the
+  // moment an upload is attempted (not once it succeeds), so a hash shared
+  // by several rows only ever triggers one upload call between them, even
+  // though each row's own onResult callback fires when their shared
+  // background job completes (see startBackgroundExact below).
+  const uploadAttemptedHashesRef = useRef(new Set());
   const stopListeningForBackgroundExact = useCallback((id, label) => {
     const previousHash = backgroundJobHashRef.current[id];
     const unsubscribe = backgroundUnsubscribersRef.current[id];
@@ -335,17 +352,34 @@ export default function AnglePlotWindow({
     }
   }, []);
 
-  // Instant preview + silent background exact upgrade
-  // -----------------------------------------------------
+  // Instant preview + silent background exact upgrade, now backed by a
+  // shared PostgreSQL library (Phase 5)
+  // -----------------------------------------------------------------------
   // STEP 1/2 (see the module's own architecture doc above the imports):
   // every request first checks GraphCache for this graph's EXACT (viewport-
   // independent) entry. A hit is used immediately and nothing is computed
-  // at all — not adaptive, not a background job — since the full,
-  // permanent answer already exists.
-  // STEP 3: on a miss, the existing viewport-scoped adaptive path runs
-  // exactly as before (own cache key, own generator, own progress
-  // reporting) so the user sees *something* as fast as this app has ever
-  // shown one, regardless of how expensive the exact sweep would be.
+  // at all — not adaptive, not a background job, not even a network call —
+  // since the full, permanent answer already exists locally.
+  // STEP 2b (new): on a local miss, ask the shared PostgreSQL library (via
+  // remoteGraphRepository.js's fetchRemoteExactGraph, never SQL directly —
+  // see server/repositories/graphRepository.js for the only module that
+  // executes any) whether some *other* session has already computed this
+  // exact hash. A hit is written into GraphCache (so a replot, or a
+  // different row sharing this hash, never asks again) and displayed
+  // immediately, skipping adaptive and brute-force entirely — the whole
+  // point of a permanent, content-addressed hash. A miss, timeout, or any
+  // failure (API not running, database down) is indistinguishable to this
+  // function — see remoteGraphRepository.js's own comment — and simply
+  // falls through to STEP 3 exactly as if this feature didn't exist, which
+  // is what keeps "PostgreSQL unavailable" from ever breaking plotting.
+  // remoteMissesRef bounds this to at most one remote check per hash per
+  // session, so a row still on PREVIEW status doesn't re-ask on every
+  // pan/zoom-driven re-render.
+  // STEP 3: on a local *and* remote miss, the existing viewport-scoped
+  // adaptive path runs exactly as before (own cache key, own generator, own
+  // progress reporting) so the user sees *something* as fast as this app
+  // has ever shown one, regardless of how expensive the exact sweep (or the
+  // network round trip) would be.
   // STEP 4: once that preview is on screen, a background exact computation
   // is requested (backgroundExactWorker.js) — deduped by hash, so N rows
   // (or N re-renders of the same row) sharing one hash only ever pay for
@@ -356,8 +390,15 @@ export default function AnglePlotWindow({
   // upgrade rather than a second visible loading cycle. See
   // backgroundExactWorker.isExactComputationRunning(hash) for how a future
   // "still refining…" indicator would read the in-between COMPUTING state
-  // without this needing to push it into per-row state at all.
-  const startSequenceJob = useCallback((seq, viewState) => {
+  // without this needing to push it into per-row state at all. When that
+  // sweep finishes as a genuine, complete result (never cancelled — a
+  // cancelled job's subscribers are already empty by the time it settles,
+  // see backgroundExactWorker.js — and never timeLimited, since a sweep
+  // truncated by MAX_BACKGROUND_EXACT_RENDER_MS is not the true exact
+  // geometry for this permanent hash), it's uploaded to the shared library
+  // the same way a download failure is handled: fire, log, never block or
+  // break plotting if it fails.
+  const startSequenceJob = useCallback(async (seq, viewState) => {
     runningIdsRef.current.add(seq.id);
     const requestId = (jobRequestIdRef.current[seq.id] = (jobRequestIdRef.current[seq.id] || 0) + 1);
     const parsed = parseAngleStep(seq.angleStepInput);
@@ -395,6 +436,38 @@ export default function AnglePlotWindow({
       setRowResult(seq.id, { points: cachedExact.points, status: 'done', renderInfo: { ...cachedExact.renderInfo, fromCache: true } });
       finishSlot();
       return;
+    }
+
+    // STEP 2b: no local exact entry — ask the shared PostgreSQL library
+    // before falling back to adaptive/brute-force (see this function's own
+    // module comment). Bounded to one remote check per hash per session
+    // via remoteMissesRef; any failure (down, unreachable, timed out) is
+    // indistinguishable from "not found" here, by remoteGraphRepository.js's
+    // own design, so this always safely falls through to STEP 3.
+    if (!remoteMissesRef.current.has(exactHash)) {
+      const remoteResult = await fetchRemoteExactGraph(exactHash);
+      // This row may have been edited (or deleted/hidden) while the network
+      // call was in flight — jobRequestIdRef's usual staleness guard (see
+      // the adaptive task's own `.then` below) applies here too; a newer
+      // invocation for this row already owns finishing it.
+      if (jobRequestIdRef.current[seq.id] !== requestId) {
+        finishSlot();
+        return;
+      }
+      if (remoteResult) {
+        const renderInfo = {
+          renderer: RENDERER_MODE.BRUTE_FORCE, graphStatus: GRAPH_STATUS.EXACT,
+          userStepDegrees: parsed.stepDegrees, gridStepDegrees: parsed.stepDegrees, requestedStepDegrees: parsed.stepDegrees,
+          displayScale: displayScaleForStep(parsed.scale), pointCount: remoteResult.points.length,
+          durationMs: remoteResult.durationMs, budgetLimited: false, timeLimited: false,
+        };
+        graphCache.set(exactHash, { points: remoteResult.points, renderInfo });
+        if (import.meta.env.DEV) console.log(`Renderer: Cache Hit (PostgreSQL) — ${seq.label} (${remoteResult.points.length} points reused)`);
+        setRowResult(seq.id, { points: remoteResult.points, status: 'done', renderInfo: { ...renderInfo, fromCache: true } });
+        finishSlot();
+        return;
+      }
+      remoteMissesRef.current.add(exactHash);
     }
 
     if (!viewState) {
@@ -476,6 +549,25 @@ export default function AnglePlotWindow({
           // the cache write below is safe and useful.
           graphCache.set(exactHash, { points, renderInfo });
           if (import.meta.env.DEV) console.log(`Renderer: Background Exact complete — ${seq.label} (${points.length} points, ${renderInfo.durationMs.toFixed(0)}ms)`);
+          // Upload to the shared PostgreSQL library — but only once per
+          // hash per session (uploadAttemptedHashesRef; a hash shared by
+          // several rows would otherwise fire one upload attempt per
+          // subscriber, since each gets its own onResult call for the same
+          // completed job — see backgroundExactWorker.js), and only for a
+          // genuinely complete sweep: `bgTimeLimited` means
+          // MAX_BACKGROUND_EXACT_RENDER_MS cut this sweep short before it
+          // covered the whole domain, so it is not the true exact geometry
+          // for this permanent hash — uploading it would store a wrong
+          // answer under a hash nothing can ever correct later. The upload
+          // itself is fire-and-forget from this call site's perspective:
+          // uploadRemoteExactGraph never throws and never blocks the UI
+          // (see remoteGraphRepository.js's own comment), so a failed or
+          // slow upload can never affect this row's already-displayed
+          // result.
+          if (!bgTimeLimited && !uploadAttemptedHashesRef.current.has(exactHash)) {
+            uploadAttemptedHashesRef.current.add(exactHash);
+            uploadRemoteExactGraph(graphParamsFromSequence(seq, baseLength), GRAPH_HASH_ALGORITHM_VERSION, points, renderInfo.durationMs);
+          }
           // Still guard the *display* update on this row's own current
           // params, since a shared job's result is only this row's to show
           // when it's actually still the row that asked for it.
