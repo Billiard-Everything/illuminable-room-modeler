@@ -1,14 +1,30 @@
 // The thin HTTP layer between the browser app and GraphRepository (Phase
-// 5's own "GraphRepository.graphExists / download / upload" pipeline). A
+// 5's own "GraphRepository.graphExists / download / upload" pipeline, now
+// joined by Phase 6's shared-library browse/search/sort/filter routes). A
 // browser tab cannot open a raw Postgres connection — this is the piece
 // that makes "the browser asks PostgreSQL" actually possible: the browser
-// calls these two routes (see src/anglePlot/remoteGraphRepository.js),
-// this file calls GraphRepository, and GraphRepository is the only thing
-// that ever touches SQL. Nothing here builds a query itself.
+// calls these routes (see src/anglePlot/remoteGraphRepository.js for the
+// download/upload pipeline's own client — Phase 6 is backend-only, so
+// nothing in src/** calls the new browse/search routes yet), this file
+// calls GraphRepository, and GraphRepository is the only thing that ever
+// touches SQL. Nothing here builds a query itself — see queryParsing.js
+// for the (non-SQL) query-string parsing that keeps these handlers thin.
 //
-// Deliberately plain Node `http`, no framework: two routes don't need one,
-// and it keeps this server free of a dependency this project otherwise has
-// no use for.
+// Deliberately plain Node `http`, no framework: a handful of routes don't
+// need one, and it keeps this server free of a dependency this project
+// otherwise has no use for.
+//
+// Route table (order matters — see the handler below)
+// -------------------------------------------------------
+//   GET  /api/graphs             listGraphs      (browse/filter/sort, metadata only)
+//   GET  /api/graphs/search      searchGraphs    (hash/code/angle/length search, metadata only)
+//   GET  /api/graphs/recent      listRecentGraphs (metadata only)
+//   GET  /api/graphs/:hash       getGraphWithGeometry (download — the one route that returns geometry)
+//   POST /api/graphs             uploadExactGraphIfMissing
+// The three metadata-only routes are matched before the generic
+// `/api/graphs/:hash` fallback specifically so a hash can never collide
+// with a literal path segment like "search" or "recent" (a real hash is a
+// long, structured string that URL-encodes distinctly from either).
 //
 // Failure handling
 // -----------------
@@ -20,6 +36,7 @@
 // this layer degrades gracefully, and so does the client that calls it).
 
 import { getGraphRepository } from '../repositories/graphRepository.js';
+import { parseListOptions, parseSearchQuery } from './queryParsing.js';
 
 const readJsonBody = (req) => new Promise((resolve, reject) => {
   let raw = '';
@@ -69,10 +86,40 @@ export const createApp = (repository) => async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
 
   try {
+    // Metadata-only browse/search routes — checked before the generic
+    // /api/graphs/:hash fallback below (see this file's own route-table
+    // comment on why order matters here).
+    if (req.method === 'GET' && url.pathname === '/api/graphs') {
+      const graphs = await repository.listGraphs(parseListOptions(url.searchParams));
+      return sendJson(res, 200, { graphs });
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/graphs/search') {
+      const query = parseSearchQuery(url.searchParams);
+      const graphs = await repository.searchGraphs(query, parseListOptions(url.searchParams));
+      return sendJson(res, 200, { graphs });
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/graphs/recent') {
+      const graphs = await repository.listRecentGraphs(parseListOptions(url.searchParams));
+      return sendJson(res, 200, { graphs });
+    }
+
+    // Download: the one route that returns full geometry, for exactly one
+    // graph at a time — never while browsing (see this task's own
+    // "avoid unnecessary database calls" / "never download geometry while
+    // browsing").
     if (req.method === 'GET' && url.pathname.startsWith('/api/graphs/')) {
       const hash = decodeURIComponent(url.pathname.slice('/api/graphs/'.length));
       if (!hash) return sendJson(res, 400, { error: 'missing hash' });
       const found = await repository.getGraphWithGeometry(hash);
+      if (found) {
+        // Usage tracking is a side effect of a successful *download*,
+        // never of browsing/searching — fire-and-forget (not awaited) so
+        // a slow or failed counter update can never delay or break the
+        // download response itself.
+        repository.recordGraphAccess(hash).catch((err) => console.error('[graph-api] recordGraphAccess failed:', err));
+      }
       return sendJson(res, 200, found ? { exists: true, ...found } : { exists: false });
     }
 

@@ -34,8 +34,103 @@
 import { getPool } from '../db/pool.js';
 import { hashGraph, GRAPH_HASH_ALGORITHM_VERSION } from '../../src/anglePlot/graphHasher.js';
 import { GRAPH_STATUS } from '../../src/anglePlot/graphStatus.js';
-import { graphRowToModel } from '../models/graph.js';
+import { graphRowToModel, graphMetadataRowToModel } from '../models/graph.js';
 import { geometryRowToModel } from '../models/geometry.js';
+
+// Shared graph library (Phase 6): browsing, search, sort, and filter over
+// every stored graph's *metadata* — never geometry (see queryGraphs' own
+// comment). One sort enum, one filter-clause builder, and one underlying
+// query (queryGraphs) back every listing method below
+// (listGraphs/searchGraphs/listGraphsByUser/listRecentGraphs/
+// listPopularGraphs/getGraphMetadata) so there is exactly one place this
+// SQL is ever written, not five.
+
+/** Sort orders queryGraphs accepts — see SORT_CLAUSES for what each maps to. */
+export const GRAPH_SORT = {
+  NEWEST: 'newest',
+  OLDEST: 'oldest',
+  RECENTLY_COMPUTED: 'recently_computed',
+  RECENTLY_USED: 'recently_used',
+  MOST_DOWNLOADED: 'most_downloaded',
+};
+
+// Whitelisted, never built from user input directly — a sort value that
+// isn't a real key here falls back to NEWEST (see queryGraphs) rather than
+// ever being interpolated into ORDER BY.
+const SORT_CLAUSES = {
+  [GRAPH_SORT.NEWEST]: 'g.created_at DESC',
+  [GRAPH_SORT.OLDEST]: 'g.created_at ASC',
+  // A graph's geometry can (in principle — see Stage 2/refinement notes
+  // elsewhere in this codebase) be recomputed after the graph row itself
+  // was created, so "recently computed" reads graph_geometry's own
+  // updated_at, not the graph row's.
+  [GRAPH_SORT.RECENTLY_COMPUTED]: 'gg.updated_at DESC NULLS LAST',
+  [GRAPH_SORT.RECENTLY_USED]: 'g.last_accessed_at DESC NULLS LAST',
+  [GRAPH_SORT.MOST_DOWNLOADED]: 'g.download_count DESC',
+};
+
+const DEFAULT_LIST_LIMIT = 50;
+// Hard cap regardless of what a caller (ultimately, an HTTP query string)
+// asks for, so a single browse/search request can never turn into an
+// unbounded table scan's worth of rows serialized into one response.
+const MAX_LIST_LIMIT = 200;
+
+// graphs LEFT JOIN graph_geometry (not INNER — see graphMetadataRowToModel's
+// own comment): a graph without geometry yet still needs to appear in a
+// listing, just reporting hasExactGeometry: false, rather than vanishing
+// from it entirely the way getGraphWithGeometry's own INNER JOIN
+// deliberately does for its different (single-graph, geometry-required)
+// use case.
+const METADATA_SELECT = `
+  SELECT
+    g.hash, g.sequence_text, g.angle_a, g.angle_b, g.angle_step_input, g.base_length,
+    g.algorithm_version, g.owner_user_id, g.created_at, g.updated_at,
+    g.download_count, g.last_accessed_at,
+    gg.point_count, gg.updated_at AS geometry_updated_at,
+    (gg.id IS NOT NULL) AS has_exact_geometry
+  FROM graphs g
+  LEFT JOIN graph_geometry gg ON gg.graph_id = g.id
+`;
+
+/**
+ * Builds the WHERE clause and positional params for every filter
+ * queryGraphs supports — the one place this SQL is written. Extension
+ * point for future filters (tags, favorites, ownership/permission scopes):
+ * each becomes one more `if` below, appended to the same clauses/params
+ * array; nothing about queryGraphs' own call sites needs to change.
+ *
+ * hash/sequenceText are partial (ILIKE '%...%') — see this phase's own
+ * "search should support partial matches where appropriate." Numeric
+ * fields (angleA/angleB/baseLength) and identifiers (ownerUserId,
+ * algorithmVersion) are exact matches; a future min/max range filter for
+ * the numeric fields would add its own `angleAMin`/`angleAMax`-style
+ * branches here without touching the exact-match ones.
+ */
+const buildGraphFilterClause = (filters = {}) => {
+  const clauses = [];
+  const params = [];
+  const push = (column, operator, value) => {
+    params.push(value);
+    clauses.push(`${column} ${operator} $${params.length}`);
+  };
+
+  // hashExact is used by getGraphMetadata (a single, known hash) so it
+  // never pays for (or risks a false-positive substring match from) an
+  // ILIKE scan the way the free-text search field below does.
+  if (filters.hashExact) push('g.hash', '=', filters.hashExact);
+  else if (filters.hash) push('g.hash', 'ILIKE', `%${filters.hash}%`);
+  if (filters.sequenceText) push('g.sequence_text', 'ILIKE', `%${filters.sequenceText}%`);
+  if (filters.angleA !== undefined) push('g.angle_a', '=', filters.angleA);
+  if (filters.angleB !== undefined) push('g.angle_b', '=', filters.angleB);
+  if (filters.baseLength !== undefined) push('g.base_length', '=', filters.baseLength);
+  if (filters.ownerUserId) push('g.owner_user_id', '=', filters.ownerUserId);
+  if (filters.algorithmVersion !== undefined) push('g.algorithm_version', '=', filters.algorithmVersion);
+  if (filters.createdAfter) push('g.created_at', '>=', filters.createdAfter);
+  if (filters.createdBefore) push('g.created_at', '<=', filters.createdBefore);
+  if (filters.onlyExactGraphs) clauses.push('gg.id IS NOT NULL');
+
+  return { whereSql: clauses.length ? `WHERE ${clauses.join(' AND ')}` : '', params };
+};
 
 /**
  * Builds a GraphRepository bound to `pool` (anything with an async
@@ -158,6 +253,90 @@ export const createGraphRepository = (pool) => ({
     const graph = await this.upsertGraph({ params, ownerUserId, algorithmVersion });
     const geometry = await this.saveGeometry(graph.id, { points, status: GRAPH_STATUS.EXACT, durationMs });
     return { uploaded: true, graph, geometry };
+  },
+
+  // --- Shared graph library: browse, search, sort, filter (Phase 6) ------
+
+  /**
+   * The one query every listing/search method below delegates to — see
+   * buildGraphFilterClause and SORT_CLAUSES for the filter/sort vocabulary
+   * this accepts. Always returns metadata only (graphMetadataRowToModel),
+   * never geometry, and always paginated (limit/offset), so a caller can
+   * never accidentally trigger an unbounded scan-and-serialize of the
+   * entire library.
+   *
+   * @param {object} [options]
+   * @param {object} [options.filters] - see buildGraphFilterClause.
+   * @param {string} [options.sort] - one of GRAPH_SORT; defaults to NEWEST.
+   * @param {number} [options.limit] - defaults to DEFAULT_LIST_LIMIT, capped at MAX_LIST_LIMIT.
+   * @param {number} [options.offset] - defaults to 0.
+   */
+  async queryGraphs({ filters = {}, sort = GRAPH_SORT.NEWEST, limit = DEFAULT_LIST_LIMIT, offset = 0 } = {}) {
+    const { whereSql, params } = buildGraphFilterClause(filters);
+    const orderBySql = SORT_CLAUSES[sort] ?? SORT_CLAUSES[GRAPH_SORT.NEWEST];
+    const safeLimit = Math.min(Math.max(1, Math.trunc(limit) || DEFAULT_LIST_LIMIT), MAX_LIST_LIMIT);
+    const safeOffset = Math.max(0, Math.trunc(offset) || 0);
+    const { rows } = await pool.query(
+      `${METADATA_SELECT} ${whereSql} ORDER BY ${orderBySql} LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      [...params, safeLimit, safeOffset],
+    );
+    return rows.map(graphMetadataRowToModel);
+  },
+
+  /** Every stored graph's metadata, optionally filtered/sorted/paginated — the shared library's general browse call. */
+  async listGraphs(options = {}) {
+    return this.queryGraphs(options);
+  },
+
+  /**
+   * Free-text/exact search over the library. `query` supplies the
+   * searchable fields (hash, sequenceText, angleA, angleB, baseLength —
+   * see buildGraphFilterClause for which are partial vs. exact matches);
+   * `options` supplies sort/pagination/additional filters exactly like
+   * listGraphs, layered on top of `query`.
+   */
+  async searchGraphs(query = {}, options = {}) {
+    return this.queryGraphs({ ...options, filters: { ...query, ...options.filters } });
+  },
+
+  /** Every graph owned by a given user — future-compatible: no auth exists yet, but the column/filter already does. */
+  async listGraphsByUser(ownerUserId, options = {}) {
+    return this.queryGraphs({ ...options, filters: { ...options.filters, ownerUserId } });
+  },
+
+  /** The newest graphs in the library — queryGraphs' own default sort, exposed as its own named call per this phase's own API examples. */
+  async listRecentGraphs(options = {}) {
+    return this.queryGraphs({ ...options, sort: options.sort ?? GRAPH_SORT.NEWEST });
+  },
+
+  /** The most-downloaded graphs in the library. */
+  async listPopularGraphs(options = {}) {
+    return this.queryGraphs({ ...options, sort: options.sort ?? GRAPH_SORT.MOST_DOWNLOADED });
+  },
+
+  /**
+   * One graph's metadata by its exact hash — no geometry (see
+   * getGraphWithGeometry for that). Reuses queryGraphs' own filter/mapping
+   * logic (via the exact-match `hashExact` filter) rather than writing a
+   * separate SELECT, so this and every listing method stay in sync by
+   * construction.
+   */
+  async getGraphMetadata(hash) {
+    const results = await this.queryGraphs({ filters: { hashExact: hash }, limit: 1 });
+    return results[0] ?? null;
+  },
+
+  /**
+   * Records that a graph was downloaded/used — called from the download
+   * route (server/api/app.js) on a successful GET /api/graphs/:hash, never
+   * from browsing/search/upload. Backs the RECENTLY_USED and
+   * MOST_DOWNLOADED sort orders.
+   */
+  async recordGraphAccess(hash) {
+    await pool.query(
+      'UPDATE graphs SET download_count = download_count + 1, last_accessed_at = now() WHERE hash = $1',
+      [hash],
+    );
   },
 
   /** Records a new background job request for a graph, in 'queued' status. */

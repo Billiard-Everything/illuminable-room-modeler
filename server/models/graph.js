@@ -26,3 +26,42 @@ export const graphRowToModel = (row) => ({
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
+
+/**
+ * Maps a row from GraphRepository's queryGraphs (graphs LEFT JOIN
+ * graph_geometry — see that method's own comment) into the metadata-only
+ * shape the shared library's browse/search/recent endpoints return.
+ * Deliberately excludes `points` (or any geometry at all) — browsing must
+ * never ship full geometry (see this phase's own "never download geometry
+ * while browsing"); only getGraphWithGeometry's own model shape does that,
+ * for the one-graph-at-a-time download path.
+ *
+ * `hasExactGeometry`/`pointCount` reflect the LEFT JOIN: a graph row with
+ * no matching graph_geometry row (shouldn't normally happen — see
+ * uploadExactGraphIfMissing, which always writes both together) still
+ * appears in listings, correctly reported as not having exact geometry
+ * yet, rather than being silently dropped.
+ *
+ * @returns {{hash, params, algorithmVersion, ownerUserId, createdAt,
+ *   updatedAt, pointCount, hasExactGeometry, geometryUpdatedAt,
+ *   downloadCount, lastAccessedAt}}
+ */
+export const graphMetadataRowToModel = (row) => ({
+  hash: row.hash,
+  params: {
+    sequenceText: row.sequence_text,
+    angleA: row.angle_a,
+    angleB: row.angle_b,
+    angleStepInput: row.angle_step_input,
+    baseLength: row.base_length,
+  },
+  algorithmVersion: row.algorithm_version,
+  ownerUserId: row.owner_user_id,
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+  pointCount: row.point_count ?? 0,
+  hasExactGeometry: row.has_exact_geometry,
+  geometryUpdatedAt: row.geometry_updated_at ?? null,
+  downloadCount: row.download_count,
+  lastAccessedAt: row.last_accessed_at,
+});
