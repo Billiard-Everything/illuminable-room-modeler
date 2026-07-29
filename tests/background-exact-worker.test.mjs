@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { requestExactComputation, isExactComputationRunning, _resetForTests } from '../src/anglePlot/backgroundExactWorker.js';
+import {
+  requestExactComputation, isExactComputationRunning, getBackgroundJobState,
+  updateBackgroundJobPriority, JOB_PRIORITY, MAX_CONCURRENT_BACKGROUND_JOBS, _resetForTests,
+} from '../src/anglePlot/backgroundExactWorker.js';
 
 // A controllable task: resolve()/reject() are exposed so tests can decide
 // exactly when the "computation" finishes, instead of racing real timers.
@@ -159,4 +162,168 @@ test('a completed job is removed from the registry, so a later request for the s
   const second = deferredTask();
   requestExactComputation('hash-a', () => { calls += 1; return second.task; }, () => {});
   assert.equal(calls, 2);
+});
+
+// --- Queue: worker limit, priority order, duplicate prevention ------------
+
+test('MAX_CONCURRENT_BACKGROUND_JOBS is 2', () => {
+  assert.equal(MAX_CONCURRENT_BACKGROUND_JOBS, 2);
+});
+
+test('only MAX_CONCURRENT_BACKGROUND_JOBS jobs run at once; extra requests queue instead of starting', () => {
+  const jobs = [deferredTask(), deferredTask(), deferredTask()];
+  jobs.forEach((job, i) => requestExactComputation(`hash-${i}`, () => job.task, () => {}));
+
+  const states = jobs.map((_, i) => getBackgroundJobState(`hash-${i}`));
+  const runningCount = states.filter((s) => s === 'running').length;
+  const queuedCount = states.filter((s) => s === 'queued').length;
+  assert.equal(runningCount, MAX_CONCURRENT_BACKGROUND_JOBS, 'no more than the worker limit may be running at once');
+  assert.equal(queuedCount, 3 - MAX_CONCURRENT_BACKGROUND_JOBS, 'everything past the limit must be queued, not dropped');
+});
+
+test('when a running job finishes, the next queued job is automatically promoted to running', async () => {
+  const jobs = [deferredTask(), deferredTask(), deferredTask()];
+  jobs.forEach((job, i) => requestExactComputation(`hash-${i}`, () => job.task, () => {}));
+  assert.equal(getBackgroundJobState('hash-2'), 'queued');
+
+  const firstRunningIndex = jobs.findIndex((_, i) => getBackgroundJobState(`hash-${i}`) === 'running');
+  jobs[firstRunningIndex].resolve([]);
+  await jobs[firstRunningIndex].task.promise;
+  await Promise.resolve();
+
+  assert.equal(getBackgroundJobState('hash-2'), 'running', 'the queued job must be promoted the moment a slot frees');
+});
+
+test('a higher-priority queued job is promoted before a lower-priority one, regardless of insertion order', async () => {
+  const running = [deferredTask(), deferredTask()];
+  running.forEach((job, i) => requestExactComputation(`running-${i}`, () => job.task, () => {}, JOB_PRIORITY.VISIBLE));
+  assert.equal(getBackgroundJobState('running-0'), 'running');
+  assert.equal(getBackgroundJobState('running-1'), 'running');
+
+  // Queue a low-priority (HIDDEN) request first, then a high-priority
+  // (VISIBLE) one — insertion order alone would favor the hidden one.
+  const hidden = deferredTask();
+  const visible = deferredTask();
+  requestExactComputation('hash-hidden', () => hidden.task, () => {}, JOB_PRIORITY.HIDDEN);
+  requestExactComputation('hash-visible', () => visible.task, () => {}, JOB_PRIORITY.VISIBLE);
+  assert.equal(getBackgroundJobState('hash-hidden'), 'queued');
+  assert.equal(getBackgroundJobState('hash-visible'), 'queued');
+
+  running[0].resolve([]);
+  await running[0].task.promise;
+  await Promise.resolve();
+
+  assert.equal(getBackgroundJobState('hash-visible'), 'running', 'higher priority must be promoted first');
+  assert.equal(getBackgroundJobState('hash-hidden'), 'queued', 'lower priority stays queued while a higher one is available');
+});
+
+test('within the same priority tier, the earliest-queued job is promoted first (FIFO)', async () => {
+  const running = [deferredTask(), deferredTask()];
+  running.forEach((job, i) => requestExactComputation(`running-${i}`, () => job.task, () => {}, JOB_PRIORITY.VISIBLE));
+
+  const first = deferredTask();
+  const second = deferredTask();
+  requestExactComputation('hash-first', () => first.task, () => {}, JOB_PRIORITY.HIDDEN);
+  requestExactComputation('hash-second', () => second.task, () => {}, JOB_PRIORITY.HIDDEN);
+
+  running[0].resolve([]);
+  await running[0].task.promise;
+  await Promise.resolve();
+
+  assert.equal(getBackgroundJobState('hash-first'), 'running');
+  assert.equal(getBackgroundJobState('hash-second'), 'queued');
+});
+
+test('a duplicate request for an already-queued hash promotes its priority instead of creating a duplicate job', async () => {
+  const running = [deferredTask(), deferredTask()];
+  running.forEach((job, i) => requestExactComputation(`running-${i}`, () => job.task, () => {}, JOB_PRIORITY.VISIBLE));
+
+  let calls = 0;
+  const queued = deferredTask();
+  requestExactComputation('hash-a', () => { calls += 1; return queued.task; }, () => {}, JOB_PRIORITY.HIDDEN);
+  // A second, unrelated low-priority request queued after it, to prove the
+  // promoted job jumps ahead of it once a slot frees.
+  const otherQueued = deferredTask();
+  requestExactComputation('hash-b', () => otherQueued.task, () => {}, JOB_PRIORITY.HIDDEN);
+
+  // A duplicate request for the same hash, now at VISIBLE priority. Still
+  // queued (no slot free yet), so computeFn has not run at all yet.
+  requestExactComputation('hash-a', () => { calls += 1; return queued.task; }, () => {}, JOB_PRIORITY.VISIBLE);
+  assert.equal(calls, 0, 'a still-queued job\'s computeFn must not run just because a duplicate request arrived');
+
+  running[0].resolve([]);
+  await running[0].task.promise;
+  await Promise.resolve();
+
+  assert.equal(getBackgroundJobState('hash-a'), 'running', 'the promoted job must be scheduled ahead of the still-HIDDEN one');
+  assert.equal(getBackgroundJobState('hash-b'), 'queued');
+  assert.equal(calls, 1, 'computeFn must run exactly once, only once the (single, deduped) job actually starts');
+});
+
+test('updateBackgroundJobPriority promotes an already-registered job without touching its subscribers or computeFn', async () => {
+  const running = [deferredTask(), deferredTask()];
+  running.forEach((job, i) => requestExactComputation(`running-${i}`, () => job.task, () => {}, JOB_PRIORITY.VISIBLE));
+
+  let calls = 0;
+  const seen = [];
+  const queued = deferredTask();
+  requestExactComputation('hash-a', () => { calls += 1; return queued.task; }, () => seen.push('a'), JOB_PRIORITY.HIDDEN);
+  const other = deferredTask();
+  requestExactComputation('hash-b', () => other.task, () => {}, JOB_PRIORITY.HIDDEN);
+
+  updateBackgroundJobPriority('hash-a', JOB_PRIORITY.VISIBLE);
+  assert.equal(calls, 0, 'updateBackgroundJobPriority must never call computeFn itself — the job is still only queued');
+  assert.equal(seen.length, 0, 'and must never notify a subscriber either — no result exists yet');
+
+  running[0].resolve([]);
+  await running[0].task.promise;
+  await Promise.resolve();
+
+  assert.equal(getBackgroundJobState('hash-a'), 'running', 'the priority-promoted job must be scheduled first');
+  assert.equal(calls, 1, 'computeFn must run exactly once, only once actually promoted to running');
+});
+
+test('updateBackgroundJobPriority never demotes an already-higher priority', async () => {
+  const running = [deferredTask(), deferredTask()];
+  running.forEach((job, i) => requestExactComputation(`running-${i}`, () => job.task, () => {}, JOB_PRIORITY.VISIBLE));
+
+  const visible = deferredTask();
+  const hidden = deferredTask();
+  requestExactComputation('hash-visible', () => visible.task, () => {}, JOB_PRIORITY.VISIBLE);
+  requestExactComputation('hash-hidden', () => hidden.task, () => {}, JOB_PRIORITY.HIDDEN);
+
+  // Attempting to "demote" hash-visible must be a no-op.
+  updateBackgroundJobPriority('hash-visible', JOB_PRIORITY.HIDDEN);
+
+  running[0].resolve([]);
+  await running[0].task.promise;
+  await Promise.resolve();
+
+  assert.equal(getBackgroundJobState('hash-visible'), 'running', 'a demotion attempt must never actually lower a job\'s priority');
+});
+
+test('unsubscribing the last listener of a still-QUEUED job drops it without ever calling computeFn', () => {
+  const running = [deferredTask(), deferredTask()];
+  running.forEach((job, i) => requestExactComputation(`running-${i}`, () => job.task, () => {}, JOB_PRIORITY.VISIBLE));
+
+  let calls = 0;
+  const queuedUnsubscribe = requestExactComputation('hash-a', () => { calls += 1; return deferredTask().task; }, () => {}, JOB_PRIORITY.HIDDEN);
+  assert.equal(getBackgroundJobState('hash-a'), 'queued');
+
+  queuedUnsubscribe();
+  assert.equal(calls, 0, 'a job that never left the queue must never have its computeFn invoked');
+  assert.equal(getBackgroundJobState('hash-a'), null, 'an unsubscribed queued job must be dropped from the registry entirely');
+});
+
+test('cancelling a running job frees its slot and promotes the next queued job', async () => {
+  const running = [deferredTask(), deferredTask()];
+  const unsubscribes = running.map((job, i) => requestExactComputation(`running-${i}`, () => job.task, () => {}, JOB_PRIORITY.VISIBLE));
+
+  const queued = deferredTask();
+  requestExactComputation('hash-a', () => queued.task, () => {}, JOB_PRIORITY.HIDDEN);
+  assert.equal(getBackgroundJobState('hash-a'), 'queued');
+
+  unsubscribes[0]();
+  assert.equal(running[0].cancelCalls, 1, 'cancelling the last subscriber of a running job must call its cancel()');
+  assert.equal(getBackgroundJobState('hash-a'), 'running', 'the queued job must be promoted immediately, synchronously, when a slot frees');
 });

@@ -8,7 +8,10 @@ import { parseAngleStep, displayScaleForStep } from './angleStep.js';
 import { RENDER_DEBOUNCE_MS, MAX_BACKGROUND_EXACT_RENDER_MS } from './renderSamplingPolicy.js';
 import { truncateSequenceText } from '../sequences/sequenceGraphConfig.js';
 import { graphCache, buildGraphCacheKey } from './graphCache.js';
-import { requestExactComputation, isExactComputationRunning } from './backgroundExactWorker.js';
+import {
+  requestExactComputation, isExactComputationRunning, updateBackgroundJobPriority,
+  getBackgroundJobState, JOB_PRIORITY,
+} from './backgroundExactWorker.js';
 import { GRAPH_STATUS } from './graphStatus.js';
 import { graphParamsFromSequence } from './graph.js';
 
@@ -44,7 +47,12 @@ import { graphParamsFromSequence } from './graph.js';
 // across rows via backgroundExactWorker.js, so identical rows never pay for
 // two sweeps) and, when it finishes, silently replaces that row's
 // points/renderInfo with the exact result — no visible reload, no change to
-// the row's order/color/visibility/selection. Because the exact sweep
+// the row's order/color/visibility/selection. Background sweeps are also
+// bounded to at most MAX_CONCURRENT_BACKGROUND_JOBS running at once (see
+// backgroundExactWorker.js) — everything else waits in a priority queue,
+// ordered by jobPriorityForSequence below (visible, then selected, then
+// freshly-plotted, then hidden), so a page with many plotted graphs never
+// tries to brute-force all of them simultaneously. Because the exact sweep
 // always covers the whole domain, its cached result does not depend on the
 // viewport and survives any amount of panning/zooming (see
 // handleViewChange's own skip for EXACT rows); the adaptive path keeps
@@ -89,6 +97,25 @@ const MIN_SIZE = { width: 380, height: 320 };
 const MAX_CONCURRENT_SEQUENCE_JOBS = 2;
 
 const emptyRowResult = () => ({ points: [], status: 'idle', renderInfo: null, progress: null, error: null });
+
+// Maps a row's current state to the background exact job queue's priority
+// (backgroundExactWorker.js's JOB_PRIORITY) for its brute-force sweep: a
+// graph currently on screen is worth computing before one that's merely
+// selected for the main canvas but hidden from the plot, which in turn
+// beats a graph that was never plotted before this exact request but is
+// otherwise hidden/unselected (a fresh, explicit "Plot" click deserves
+// more urgency than some other, older hidden graph's re-request) — and any
+// other hidden, non-selected, previously-requested graph is lowest.
+// `everRequestedIds` is a session-lifetime Set (see everRequestedExactIdsRef
+// below), not per-hash, so replotting the *same* row under a *different*
+// hash later still correctly reads as HIDDEN rather than NEWLY_PLOTTED
+// again.
+const jobPriorityForSequence = (seq, activeSequenceId, everRequestedIds) => {
+  if (seq.visible) return JOB_PRIORITY.VISIBLE;
+  if (seq.id === activeSequenceId) return JOB_PRIORITY.SELECTED;
+  if (!everRequestedIds.has(seq.id)) return JOB_PRIORITY.NEWLY_PLOTTED;
+  return JOB_PRIORITY.HIDDEN;
+};
 
 // How long to wait, after this window's own state (position, size,
 // minimize/maximize, view lock, or the shared panel's zoom/pan) last
@@ -232,6 +259,11 @@ export default function AnglePlotWindow({
   // running for them, untouched.
   const backgroundUnsubscribersRef = useRef({});
   const backgroundJobHashRef = useRef({});
+  // Row ids that have ever made a background-exact request this session —
+  // purely for jobPriorityForSequence's NEWLY_PLOTTED tier (see its own
+  // comment above). Never cleared on delete: a deleted row's id isn't
+  // reused, so a stale entry is inert, not a correctness risk.
+  const everRequestedExactIdsRef = useRef(new Set());
   const stopListeningForBackgroundExact = useCallback((id, label) => {
     const previousHash = backgroundJobHashRef.current[id];
     const unsubscribe = backgroundUnsubscribersRef.current[id];
@@ -374,6 +406,15 @@ export default function AnglePlotWindow({
     // path and the freshly-computed-preview path below so neither has to
     // duplicate this.
     const startBackgroundExact = () => {
+      // Priority reflects this row's *current* state (visible/selected),
+      // read fresh via sequencesRef rather than the closed-over `seq` —
+      // this callback can run well after startSequenceJob was first
+      // invoked (e.g. after a slow adaptive preview), by which time the
+      // row's visibility or selection could have changed.
+      const currentSeq = sequencesRef.current.find((s) => s.id === seq.id) ?? seq;
+      const priority = jobPriorityForSequence(currentSeq, activeSequenceId, everRequestedExactIdsRef.current);
+      everRequestedExactIdsRef.current.add(seq.id);
+
       // This row can be re-scheduled for reasons that never actually change
       // its exact hash — e.g. a view/fit change re-running the *adaptive*
       // preview after the panel auto-fits to a fresh (but content-identical)
@@ -381,23 +422,24 @@ export default function AnglePlotWindow({
       // row is already subscribed to this exact hash's job, there is
       // nothing stale to cancel: unsubscribing and immediately
       // resubscribing here would needlessly cancel-and-restart an already-
-      // correct, still-running computation for no reason, discarding
-      // whatever progress it had made. Only when the hash has genuinely
-      // changed is the previous subscription actually stale.
-      if (backgroundJobHashRef.current[seq.id] === exactHash) return;
+      // correct, still-running (or still-queued) computation for no reason,
+      // discarding whatever progress it had made. Its priority can still
+      // have changed, though (e.g. the row just became visible), so that
+      // gets refreshed either way. Only when the hash has genuinely changed
+      // is the previous subscription actually stale.
+      if (backgroundJobHashRef.current[seq.id] === exactHash) {
+        updateBackgroundJobPriority(exactHash, priority);
+        return;
+      }
       // A previous background job this row was subscribed to (e.g. a
       // still-in-flight sweep for whatever this row's *last* configuration
       // was) is no longer relevant to this row once it's been replotted
       // under a new hash — stop listening to it, which cancels it outright
-      // if this row was its only remaining subscriber (see
-      // backgroundExactWorker.js and stopListeningForBackgroundExact above).
+      // (or drops it from the queue if it hadn't started yet) if this row
+      // was its only remaining subscriber (see backgroundExactWorker.js and
+      // stopListeningForBackgroundExact above).
       stopListeningForBackgroundExact(seq.id, seq.label);
-      const alreadyRunning = isExactComputationRunning(exactHash);
-      if (import.meta.env.DEV) {
-        console.log(alreadyRunning
-          ? `Renderer: Background Exact joined (already running) — ${seq.label}`
-          : `Renderer: Background Exact started — ${seq.label}`);
-      }
+      const existedAlready = isExactComputationRunning(exactHash);
       const bgStartedAt = performance.now();
       let bgTimeLimited = false;
       const unsubscribe = requestExactComputation(
@@ -438,9 +480,20 @@ export default function AnglePlotWindow({
           if (currentHash !== exactHash) return;
           setRowResult(seq.id, { points, status: 'done', renderInfo });
         },
+        priority,
       );
       backgroundUnsubscribersRef.current[seq.id] = unsubscribe;
       backgroundJobHashRef.current[seq.id] = exactHash;
+      if (import.meta.env.DEV) {
+        // getBackgroundJobState is read *after* requestExactComputation, so
+        // it reflects whatever the queue actually did with this request —
+        // 'running' if a slot was free, 'queued' if both were already busy
+        // with higher-or-equal priority work.
+        const state = getBackgroundJobState(exactHash);
+        console.log(existedAlready
+          ? `Renderer: Background Exact joined (${state}) — ${seq.label}`
+          : `Renderer: Background Exact ${state} — ${seq.label}`);
+      }
     };
 
     // STEP 3: the existing adaptive, viewport-scoped preview path —
