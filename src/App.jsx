@@ -1,11 +1,18 @@
 // React supplies state, refs, effects, and memoization for this client-only tool.
 import { useState, useRef, useEffect, useMemo } from 'react';
 // Lucide supplies recognizable control/status icons without custom SVG code.
-import { Maximize, Zap, Settings2, List, Code2, Compass, ChevronRight, ChevronLeft, Activity, CheckCircle2, XCircle, ShieldCheck, Eye, EyeOff, Search, AlertTriangle, Sun, Moon, ZoomIn, ZoomOut, Lock, Unlock, ScatterChart, Plus, Loader2, Trash2 } from 'lucide-react';
+import { Maximize, Zap, Settings2, List, Code2, Compass, ChevronRight, ChevronLeft, Activity, CheckCircle2, XCircle, ShieldCheck, Eye, EyeOff, Search, AlertTriangle, Sun, Moon, ZoomIn, ZoomOut, Lock, Unlock, ScatterChart, Plus, Loader2, Trash2, Library } from 'lucide-react';
 // The angle-region plot pop-up lives in its own module (see src/anglePlot) so
 // it can be unit-tested without React and does not bloat this file further.
 import AnglePlotWindow from './anglePlot/AnglePlotWindow.jsx';
 import GraphSetupWindow from './sequences/GraphSetupWindow.jsx';
+// The Graph Library panel (browse/search/load previously-computed graphs
+// from the shared PostgreSQL library) owns none of its own plotting logic
+// — it hands a loaded graph's params/geometry back via onLoadGraph, and
+// this file is what actually inserts it into the existing sequences/
+// AnglePlotWindow pipeline (see handleLoadGraphFromLibrary below).
+import GraphLibraryPanel from './graphLibrary/GraphLibraryPanel.jsx';
+import { primeExactGraphCache } from './anglePlot/exactGraphCaching.js';
 // The multi-sequence row list (Desmos-style "+ Add Sequence") is a plain
 // data model shared between the sidebar row list and the graph pop-up, so
 // both stay in sync on id/label/color assignment without duplicating logic.
@@ -1698,6 +1705,11 @@ export default function App() {
   // Graph Setup is an optional multi-row editor; it shares the existing row
   // model and never replaces the sidebar's established active-row workflow.
   const [isGraphSetupOpen, setIsGraphSetupOpen] = useState(false);
+  // Graph Library: browse/search the shared PostgreSQL library and load a
+  // previously-computed graph into a brand-new row. Not persisted across
+  // reloads (matching isGraphSetupOpen's own choice) — it's an optional
+  // browsing tool, not part of "the workspace" being restored.
+  const [isGraphLibraryOpen, setIsGraphLibraryOpen] = useState(false);
   // Bumped on every "Plot Valid Angle Region" click so an already-open window
   // regenerates and comes to the front instead of a duplicate window opening.
   const [anglePlotRequestId, setAnglePlotRequestId] = useState(0);
@@ -2416,6 +2428,50 @@ export default function App() {
     handleOpenAnglePlot();
   };
 
+  // Graph Library's "Load Graph" button (see GraphLibraryPanel.jsx and
+  // useGraphLibrary.js) hands back a library graph's metadata plus its
+  // already-fetched-or-locally-cached geometry — this is the one place
+  // that turns that into a normal new row, exactly like any other newly
+  // plotted graph. AnglePlotWindow.jsx never learns (and never needs to)
+  // that this row's first result came from PostgreSQL instead of a fresh
+  // computation.
+  const handleLoadGraphFromLibrary = (graph, geometry) => {
+    const { params } = graph;
+    // baseLength is the one setting still shared by every row (see its own
+    // declaration comment) — if the loaded graph was computed under a
+    // different Base Length than the app's current one, syncing it here is
+    // what keeps the loaded row's geometry actually correct, at the cost
+    // of every *other* existing row needing a manual replot to pick up the
+    // new length too — the same tradeoff editing Base Geometry directly
+    // already carries today, not a new one this introduces.
+    const graphBaseLength = Number(params.baseLength);
+    if (Number.isFinite(graphBaseLength) && graphBaseLength !== baseTriangleLength) {
+      setBaseTriangleLength(graphBaseLength);
+    }
+
+    const number = nextSequenceNumberRef.current++;
+    const newRow = createSequenceRow({
+      number,
+      sequenceText: params.sequenceText,
+      angleStepInput: params.angleStepInput,
+      angleA: params.angleA,
+      angleB: params.angleB,
+    });
+
+    // Pre-populate GraphCache under the library's own authoritative hash
+    // *before* this row's first plot job runs, so that job's own STEP 2
+    // (AnglePlotWindow.jsx) is an instant local hit — never a second
+    // download, never a recompute (this feature's own "avoid duplicate
+    // downloads").
+    primeExactGraphCache(graph.hash, newRow.angleStepInput, geometry);
+
+    setSequences(rows => relabelSequenceRows([...rows, newRow]));
+    setActiveSequenceId(newRow.id);
+    setIsAnglePlotOpen(true);
+    setForceGenerateRequest({ id: newRow.id, token: ++forceGenerateTokenRef.current });
+    setIsGraphLibraryOpen(false);
+  };
+
   // --- SEQUENCE ROW LIST HANDLERS ---
   // "+ Add Sequence": appends a new, empty, visible row and makes it active
   // (matches "click a row to edit it" — a freshly added row is the one the
@@ -2907,13 +2963,23 @@ export default function App() {
               <p className="text-[10px] text-slate-500 mb-2 leading-relaxed">
                 Each card is one independent graph with its own code, Angle A/B, Angle Step, and color, plotted together on the shared Valid Angle A-B Region graph. Click a card to make it the active unfolding shown on the main canvas.
               </p>
-              <button
-                type="button"
-                onClick={() => setIsGraphSetupOpen(true)}
-                className="mb-3 flex w-full items-center justify-center gap-1.5 rounded-md border border-cyan-300/35 bg-cyan-500/15 px-2.5 py-1.5 text-[11px] font-bold text-cyan-100 transition-colors hover:bg-cyan-500/25"
-              >
-                <Settings2 className="w-3.5 h-3.5" /> Graph Setup
-              </button>
+              <div className="mb-3 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsGraphSetupOpen(true)}
+                  className="flex flex-1 items-center justify-center gap-1.5 rounded-md border border-cyan-300/35 bg-cyan-500/15 px-2.5 py-1.5 text-[11px] font-bold text-cyan-100 transition-colors hover:bg-cyan-500/25"
+                >
+                  <Settings2 className="w-3.5 h-3.5" /> Graph Setup
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsGraphLibraryOpen(true)}
+                  title="Browse, search, and load graphs already computed and shared to the library"
+                  className="flex flex-1 items-center justify-center gap-1.5 rounded-md border border-cyan-300/35 bg-cyan-500/15 px-2.5 py-1.5 text-[11px] font-bold text-cyan-100 transition-colors hover:bg-cyan-500/25"
+                >
+                  <Library className="w-3.5 h-3.5" /> Graph Library
+                </button>
+              </div>
 
               {/* One independent card per graph. Bounded height + its own
                   scrollbar (not the whole sidebar's) so adding many graphs
@@ -3853,6 +3919,18 @@ export default function App() {
           onCancelDraft={handleCancelSequenceDraft}
           onClose={() => setIsGraphSetupOpen(false)}
           onOpenPlot={handleOpenPlotFromGraphSetup}
+        />
+      )}
+
+      {/* Graph Library: browse/search/load previously-computed graphs from
+          the shared PostgreSQL library. Owns no plotting state itself —
+          handleLoadGraphFromLibrary is what actually creates a new row and
+          feeds it into the existing AnglePlotWindow pipeline. */}
+      {isGraphLibraryOpen && (
+        <GraphLibraryPanel
+          isOpen={isGraphLibraryOpen}
+          onClose={() => setIsGraphLibraryOpen(false)}
+          onLoadGraph={handleLoadGraphFromLibrary}
         />
       )}
 

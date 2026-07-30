@@ -37,6 +37,8 @@ test('listMigrationFiles returns every .sql file in filename order', () => {
     '0002_create_graphs.sql',
     '0003_create_graph_geometry.sql',
     '0004_create_graph_jobs.sql',
+    '0005_add_graph_usage_tracking.sql',
+    '0006_add_graph_search_indexes.sql',
   ]);
 });
 
@@ -48,6 +50,8 @@ test('runMigrations applies every migration, in order, on a fresh database', asy
     '0002_create_graphs.sql',
     '0003_create_graph_geometry.sql',
     '0004_create_graph_jobs.sql',
+    '0005_add_graph_usage_tracking.sql',
+    '0006_add_graph_search_indexes.sql',
   ]);
 });
 
@@ -61,7 +65,10 @@ test('runMigrations actually runs each file\'s own SQL content, not just tracks 
 test('runMigrations skips already-applied migrations and only runs the rest', async () => {
   const pool = createFakePool(['0001_create_users.sql', '0002_create_graphs.sql']);
   const applied = await runMigrations(pool, MIGRATIONS_DIR);
-  assert.deepEqual(applied, ['0003_create_graph_geometry.sql', '0004_create_graph_jobs.sql']);
+  assert.deepEqual(applied, [
+    '0003_create_graph_geometry.sql', '0004_create_graph_jobs.sql',
+    '0005_add_graph_usage_tracking.sql', '0006_add_graph_search_indexes.sql',
+  ]);
 });
 
 test('running runMigrations again after everything is applied is a no-op', async () => {
@@ -76,5 +83,6 @@ test('runMigrations records each applied migration in schema_migrations exactly 
   await runMigrations(pool, MIGRATIONS_DIR);
   assert.deepEqual([...pool.applied].sort(), [
     '0001_create_users.sql', '0002_create_graphs.sql', '0003_create_graph_geometry.sql', '0004_create_graph_jobs.sql',
+    '0005_add_graph_usage_tracking.sql', '0006_add_graph_search_indexes.sql',
   ]);
 });

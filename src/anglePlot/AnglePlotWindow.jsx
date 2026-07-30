@@ -10,6 +10,7 @@ import { truncateSequenceText } from '../sequences/sequenceGraphConfig.js';
 import { graphCache, buildGraphCacheKey } from './graphCache.js';
 import { hashGraph, GRAPH_HASH_ALGORITHM_VERSION } from './graphHasher.js';
 import { fetchRemoteExactGraph, uploadRemoteExactGraph } from './remoteGraphRepository.js';
+import { primeExactGraphCache } from './exactGraphCaching.js';
 import {
   requestExactComputation, isExactComputationRunning, updateBackgroundJobPriority,
   getBackgroundJobState, JOB_PRIORITY,
@@ -455,13 +456,12 @@ export default function AnglePlotWindow({
         return;
       }
       if (remoteResult) {
-        const renderInfo = {
-          renderer: RENDERER_MODE.BRUTE_FORCE, graphStatus: GRAPH_STATUS.EXACT,
-          userStepDegrees: parsed.stepDegrees, gridStepDegrees: parsed.stepDegrees, requestedStepDegrees: parsed.stepDegrees,
-          displayScale: displayScaleForStep(parsed.scale), pointCount: remoteResult.points.length,
-          durationMs: remoteResult.durationMs, budgetLimited: false, timeLimited: false,
-        };
-        graphCache.set(exactHash, { points: remoteResult.points, renderInfo });
+        // primeExactGraphCache (exactGraphCaching.js) builds renderInfo and
+        // writes GraphCache in one call — the same helper the Graph
+        // Library's "Load Graph" action uses, so a PostgreSQL-sourced
+        // graph's cache entry has one shape regardless of which of the two
+        // ever-diverging call sites actually populated it.
+        const renderInfo = primeExactGraphCache(exactHash, seq.angleStepInput, remoteResult);
         if (import.meta.env.DEV) console.log(`Renderer: Cache Hit (PostgreSQL) — ${seq.label} (${remoteResult.points.length} points reused)`);
         setRowResult(seq.id, { points: remoteResult.points, status: 'done', renderInfo: { ...renderInfo, fromCache: true } });
         finishSlot();

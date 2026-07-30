@@ -10,6 +10,10 @@ import { createApp } from '../server/api/app.js';
 const createFakeRepository = (overrides = {}) => ({
   getGraphWithGeometry: async () => null,
   uploadExactGraphIfMissing: async () => ({ uploaded: true }),
+  recordGraphAccess: async () => {},
+  listGraphs: async () => [],
+  searchGraphs: async () => [],
+  listRecentGraphs: async () => [],
   ...overrides,
 });
 
@@ -112,5 +116,111 @@ test('OPTIONS preflight requests get CORS headers and a 204, without touching th
   assert.equal(res.status, 204);
   assert.equal(res.headers.get('access-control-allow-origin'), '*');
   assert.equal(called, false);
+  server.close();
+});
+
+// --- Shared graph library routes (Phase 6) --------------------------------
+
+test('GET /api/graphs calls listGraphs with parsed query options and returns { graphs }', async () => {
+  let receivedOptions = null;
+  const graphs = [{ hash: 'h1', pointCount: 10 }];
+  const { server, baseUrl } = await startTestServer(createFakeRepository({
+    listGraphs: async (options) => { receivedOptions = options; return graphs; },
+  }));
+  const res = await fetch(`${baseUrl}/api/graphs?sort=oldest&limit=5`);
+  const body = await res.json();
+  assert.equal(res.status, 200);
+  assert.deepEqual(body, { graphs });
+  assert.deepEqual(receivedOptions, { sort: 'oldest', limit: 5 });
+  server.close();
+});
+
+test('GET /api/graphs/search calls searchGraphs with the parsed search query and list options', async () => {
+  let receivedQuery = null;
+  let receivedOptions = null;
+  const { server, baseUrl } = await startTestServer(createFakeRepository({
+    searchGraphs: async (query, options) => { receivedQuery = query; receivedOptions = options; return []; },
+  }));
+  const res = await fetch(`${baseUrl}/api/graphs/search?code=RRL&angleA=15&sort=most_downloaded`);
+  const body = await res.json();
+  assert.equal(res.status, 200);
+  assert.deepEqual(body, { graphs: [] });
+  assert.deepEqual(receivedQuery, { sequenceText: 'RRL', angleA: 15 });
+  assert.deepEqual(receivedOptions, { sort: 'most_downloaded' });
+  server.close();
+});
+
+test('GET /api/graphs/recent calls listRecentGraphs and is matched before the generic :hash route', async () => {
+  let recentCalled = false;
+  let hashRouteCalled = false;
+  const { server, baseUrl } = await startTestServer(createFakeRepository({
+    listRecentGraphs: async () => { recentCalled = true; return []; },
+    getGraphWithGeometry: async () => { hashRouteCalled = true; return null; },
+  }));
+  const res = await fetch(`${baseUrl}/api/graphs/recent`);
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { graphs: [] });
+  assert.equal(recentCalled, true);
+  assert.equal(hashRouteCalled, false, '"recent" must never be treated as a hash by the download route');
+  server.close();
+});
+
+test('GET /api/graphs/search is matched before the generic :hash route (never treated as a hash)', async () => {
+  let hashRouteCalled = false;
+  const { server, baseUrl } = await startTestServer(createFakeRepository({
+    searchGraphs: async () => [],
+    getGraphWithGeometry: async () => { hashRouteCalled = true; return null; },
+  }));
+  await fetch(`${baseUrl}/api/graphs/search?hash=abc`);
+  assert.equal(hashRouteCalled, false);
+  server.close();
+});
+
+test('a successful GET /api/graphs/:hash records access via recordGraphAccess', async () => {
+  let recordedHash = null;
+  const { server, baseUrl } = await startTestServer(createFakeRepository({
+    getGraphWithGeometry: async () => ({ graph: { hash: 'h1' }, geometry: { points: [] } }),
+    recordGraphAccess: async (hash) => { recordedHash = hash; },
+  }));
+  const res = await fetch(`${baseUrl}/api/graphs/h1`);
+  assert.equal(res.status, 200);
+  // recordGraphAccess is fire-and-forget (not awaited by the route), so
+  // give its microtask a turn to run before asserting.
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(recordedHash, 'h1');
+  server.close();
+});
+
+test('a miss on GET /api/graphs/:hash never calls recordGraphAccess', async () => {
+  let called = false;
+  const { server, baseUrl } = await startTestServer(createFakeRepository({
+    getGraphWithGeometry: async () => null,
+    recordGraphAccess: async () => { called = true; },
+  }));
+  await fetch(`${baseUrl}/api/graphs/missing-hash`);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(called, false);
+  server.close();
+});
+
+test('a recordGraphAccess failure never affects the download response itself', async () => {
+  const { server, baseUrl } = await startTestServer(createFakeRepository({
+    getGraphWithGeometry: async () => ({ graph: { hash: 'h1' }, geometry: { points: [] } }),
+    recordGraphAccess: async () => { throw new Error('tracking db down'); },
+  }));
+  const res = await fetch(`${baseUrl}/api/graphs/h1`);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.exists, true);
+  server.close();
+});
+
+test('browse/search/recent routes never return a `points` field, even if the repository fake includes one', async () => {
+  const { server, baseUrl } = await startTestServer(createFakeRepository({
+    listGraphs: async () => [{ hash: 'h1', pointCount: 5, hasExactGeometry: true }],
+  }));
+  const res = await fetch(`${baseUrl}/api/graphs`);
+  const body = await res.json();
+  assert.ok(!('points' in body.graphs[0]));
   server.close();
 });
