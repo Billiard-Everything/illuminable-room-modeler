@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { fetchRemoteExactGraph, uploadRemoteExactGraph } from '../src/anglePlot/remoteGraphRepository.js';
+import { fetchRemoteExactGraph, uploadRemoteExactGraph, fetchGraphLibraryPage } from '../src/anglePlot/remoteGraphRepository.js';
 
 const originalFetch = globalThis.fetch;
 test.afterEach(() => { globalThis.fetch = originalFetch; });
@@ -75,4 +75,90 @@ test('uploadRemoteExactGraph never throws when the server times out', async () =
     signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
   });
   await assert.doesNotReject(() => uploadRemoteExactGraph({}, 1, [], null, { timeoutMs: 30 }));
+});
+
+// --- fetchGraphLibraryPage (Graph Library browse/search client) ----------
+
+test('fetchGraphLibraryPage with no search fields hits GET /api/graphs (browse, not search)', async () => {
+  let capturedUrl;
+  globalThis.fetch = async (url) => { capturedUrl = url; return { ok: true, json: async () => ({ graphs: [] }) }; };
+  await fetchGraphLibraryPage();
+  assert.match(capturedUrl, /\/api\/graphs\?/);
+  assert.ok(!capturedUrl.includes('/api/graphs/search'));
+});
+
+test('fetchGraphLibraryPage routes to GET /api/graphs/search the moment any search field is present', async () => {
+  let capturedUrl;
+  globalThis.fetch = async (url) => { capturedUrl = url; return { ok: true, json: async () => ({ graphs: [] }) }; };
+  await fetchGraphLibraryPage({ search: { code: 'RRL' } });
+  assert.match(capturedUrl, /\/api\/graphs\/search\?/);
+  assert.match(capturedUrl, /code=RRL/);
+});
+
+test('fetchGraphLibraryPage passes sort/limit/offset as query params', async () => {
+  let capturedUrl;
+  globalThis.fetch = async (url) => { capturedUrl = url; return { ok: true, json: async () => ({ graphs: [] }) }; };
+  await fetchGraphLibraryPage({ sort: 'oldest', limit: 20, offset: 40 });
+  const url = new URL(capturedUrl);
+  assert.equal(url.searchParams.get('sort'), 'oldest');
+  assert.equal(url.searchParams.get('limit'), '20');
+  assert.equal(url.searchParams.get('offset'), '40');
+});
+
+test('fetchGraphLibraryPage passes filters (onlyExactGraphs, ownerUserId, algorithmVersion, date range) as query params', async () => {
+  let capturedUrl;
+  globalThis.fetch = async (url) => { capturedUrl = url; return { ok: true, json: async () => ({ graphs: [] }) }; };
+  await fetchGraphLibraryPage({
+    filters: { onlyExactGraphs: true, ownerUserId: 'user-1', algorithmVersion: 1, createdAfter: '2026-01-01', createdBefore: '2026-02-01' },
+  });
+  const url = new URL(capturedUrl);
+  assert.equal(url.searchParams.get('onlyExactGraphs'), 'true');
+  assert.equal(url.searchParams.get('ownerUserId'), 'user-1');
+  assert.equal(url.searchParams.get('algorithmVersion'), '1');
+  assert.equal(url.searchParams.get('createdAfter'), '2026-01-01');
+  assert.equal(url.searchParams.get('createdBefore'), '2026-02-01');
+});
+
+test('fetchGraphLibraryPage passes hash/code/angleA/angleB/baseLength search fields as query params', async () => {
+  let capturedUrl;
+  globalThis.fetch = async (url) => { capturedUrl = url; return { ok: true, json: async () => ({ graphs: [] }) }; };
+  await fetchGraphLibraryPage({ search: { hash: 'alg1|code(x)', angleA: 15, angleB: 50, baseLength: 90 } });
+  const url = new URL(capturedUrl);
+  assert.equal(url.searchParams.get('hash'), 'alg1|code(x)');
+  assert.equal(url.searchParams.get('angleA'), '15');
+  assert.equal(url.searchParams.get('angleB'), '50');
+  assert.equal(url.searchParams.get('baseLength'), '90');
+});
+
+test('fetchGraphLibraryPage returns { graphs, error: false } on success', async () => {
+  const graphs = [{ hash: 'h1' }, { hash: 'h2' }];
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ graphs }) });
+  const result = await fetchGraphLibraryPage();
+  assert.deepEqual(result, { graphs, error: false });
+});
+
+test('fetchGraphLibraryPage returns { graphs: [], error: true } on a non-ok response, never throws', async () => {
+  globalThis.fetch = async () => ({ ok: false, status: 503 });
+  const result = await fetchGraphLibraryPage();
+  assert.deepEqual(result, { graphs: [], error: true });
+});
+
+test('fetchGraphLibraryPage returns { graphs: [], error: true } when fetch itself rejects, never throws', async () => {
+  globalThis.fetch = async () => { throw new Error('connection refused'); };
+  const result = await fetchGraphLibraryPage();
+  assert.deepEqual(result, { graphs: [], error: true });
+});
+
+test('fetchGraphLibraryPage returns { graphs: [], error: true } on timeout', async () => {
+  globalThis.fetch = (url, { signal }) => new Promise((_resolve, reject) => {
+    signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+  });
+  const result = await fetchGraphLibraryPage({}, { timeoutMs: 30 });
+  assert.deepEqual(result, { graphs: [], error: true });
+});
+
+test('fetchGraphLibraryPage defaults a missing graphs field in the response to an empty array', async () => {
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({}) });
+  const result = await fetchGraphLibraryPage();
+  assert.deepEqual(result, { graphs: [], error: false });
 });

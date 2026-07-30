@@ -24,6 +24,15 @@
 
 const DEFAULT_TIMEOUT_MS = 600;
 
+// Browsing/searching the shared library (server/api/app.js's GET
+// /api/graphs, /api/graphs/search) is a deliberate, user-initiated action —
+// opening the Graph Library panel or typing a search — not something
+// gating an in-progress render the way fetchRemoteExactGraph's 600ms is.
+// It can afford to wait a little longer for a real response before giving
+// up, without any of the "instant preview" pressure that timeout exists
+// for.
+const LIBRARY_TIMEOUT_MS = 5000;
+
 // import.meta.env is Vite-injected and undefined under plain Node (e.g.
 // this module's own tests) — optional-chained throughout, matching
 // workspaceManager.js's own established fix for the same gotcha.
@@ -101,5 +110,65 @@ export const uploadRemoteExactGraph = async (params, algorithmVersion, points, d
       : 'Renderer: Exact graph already in the shared PostgreSQL library, skipped upload');
   } catch (err) {
     devWarn('Renderer: PostgreSQL upload unavailable, exact graph stays local-only for now', err);
+  }
+};
+
+/**
+ * Browses or searches the shared graph library's metadata (never geometry
+ * — see server/api/app.js's own route-table comment on why the
+ * browse/search routes are metadata-only). Used by the Graph Library panel
+ * (src/graphLibrary/**) — nothing in the rendering pipeline calls this.
+ *
+ * Routes to GET /api/graphs/search instead of GET /api/graphs the moment
+ * any of `search`'s fields are present, mirroring server/api/app.js's own
+ * route table; a caller never has to pick the route by hand.
+ *
+ * @param {object} [params]
+ * @param {string} [params.sort] - one of GraphRepository's GRAPH_SORT values.
+ * @param {number} [params.limit]
+ * @param {number} [params.offset]
+ * @param {{onlyExactGraphs?: boolean, ownerUserId?: string, algorithmVersion?: number, createdAfter?: string, createdBefore?: string}} [params.filters]
+ * @param {{hash?: string, code?: string, angleA?: number, angleB?: number, baseLength?: number}} [params.search]
+ * @param {{timeoutMs?: number}} [options]
+ * @returns {Promise<{graphs: Array, error: boolean}>} `error: true` on any
+ *   failure (never thrown) — kept distinct from an empty `graphs` array so
+ *   the panel can tell "the library has nothing matching yet" apart from
+ *   "couldn't reach the library right now."
+ */
+export const fetchGraphLibraryPage = async ({ sort, limit, offset, filters = {}, search = {} } = {}, { timeoutMs = LIBRARY_TIMEOUT_MS } = {}) => {
+  const queryParams = new URLSearchParams();
+  if (sort) queryParams.set('sort', sort);
+  if (limit !== undefined) queryParams.set('limit', String(limit));
+  if (offset !== undefined) queryParams.set('offset', String(offset));
+  if (filters.onlyExactGraphs) queryParams.set('onlyExactGraphs', 'true');
+  if (filters.ownerUserId) queryParams.set('ownerUserId', filters.ownerUserId);
+  if (filters.algorithmVersion !== undefined && filters.algorithmVersion !== '') queryParams.set('algorithmVersion', String(filters.algorithmVersion));
+  if (filters.createdAfter) queryParams.set('createdAfter', filters.createdAfter);
+  if (filters.createdBefore) queryParams.set('createdBefore', filters.createdBefore);
+
+  const hasSearch = search.hash || search.code
+    || (search.angleA !== undefined && search.angleA !== '')
+    || (search.angleB !== undefined && search.angleB !== '')
+    || (search.baseLength !== undefined && search.baseLength !== '');
+  if (hasSearch) {
+    if (search.hash) queryParams.set('hash', search.hash);
+    if (search.code) queryParams.set('code', search.code);
+    if (search.angleA !== undefined && search.angleA !== '') queryParams.set('angleA', String(search.angleA));
+    if (search.angleB !== undefined && search.angleB !== '') queryParams.set('angleB', String(search.angleB));
+    if (search.baseLength !== undefined && search.baseLength !== '') queryParams.set('baseLength', String(search.baseLength));
+  }
+
+  const path = hasSearch ? '/api/graphs/search' : '/api/graphs';
+  try {
+    const res = await fetchWithTimeout(`${apiBaseUrl()}${path}?${queryParams}`, {}, timeoutMs);
+    if (!res.ok) {
+      devWarn(`Renderer: Graph Library browse/search returned ${res.status}`);
+      return { graphs: [], error: true };
+    }
+    const body = await res.json();
+    return { graphs: body.graphs ?? [], error: false };
+  } catch (err) {
+    devWarn('Renderer: Graph Library unavailable', err);
+    return { graphs: [], error: true };
   }
 };
