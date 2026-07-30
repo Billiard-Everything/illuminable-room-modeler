@@ -55,15 +55,40 @@ const loadPg = async () => {
  * node-postgres itself already recognizes, applied explicitly here so this
  * module's behavior doesn't silently depend on undocumented library
  * defaults.
+ *
+ * SSL
+ * ----
+ * Hosted Postgres providers (Supabase included) require SSL and reject a
+ * plain connection outright; a local dev Postgres on your own machine
+ * almost never has SSL configured at all. Rather than make every deployer
+ * remember to flip a setting, this defaults SSL on for the DATABASE_URL
+ * path (the one production/hosted deployments actually use) and off for
+ * the discrete PGHOST/etc. path (the one local development uses) —
+ * `PGSSL=disable`/`PGSSL=require` overrides either default explicitly, for
+ * the rarer case of a hosted DATABASE_URL that doesn't need it or a local
+ * Postgres that does.
+ * `rejectUnauthorized: false` accepts the provider's own TLS certificate
+ * without needing its CA bundle configured — the standard, widely-used
+ * setting for connecting node-postgres to Supabase/Render/etc. It still
+ * encrypts the connection; it just doesn't verify the certificate chain,
+ * which is an acceptable tradeoff for this project's threat model (no
+ * secrets flow over this connection beyond the DB credentials themselves,
+ * already sent encrypted).
  */
 export const buildPoolConfig = (env = process.env) => {
-  if (env.DATABASE_URL) return { connectionString: env.DATABASE_URL };
+  if (env.DATABASE_URL) {
+    return {
+      connectionString: env.DATABASE_URL,
+      ssl: env.PGSSL === 'disable' ? false : { rejectUnauthorized: false },
+    };
+  }
   return {
     host: env.PGHOST ?? 'localhost',
     port: env.PGPORT ? Number(env.PGPORT) : 5432,
     user: env.PGUSER,
     password: env.PGPASSWORD,
     database: env.PGDATABASE,
+    ssl: env.PGSSL === 'require' ? { rejectUnauthorized: false } : false,
   };
 };
 

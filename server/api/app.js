@@ -16,6 +16,7 @@
 //
 // Route table (order matters — see the handler below)
 // -------------------------------------------------------
+//   GET  /health                 liveness check for the hosting platform (Render)
 //   GET  /api/graphs             listGraphs      (browse/filter/sort, metadata only)
 //   GET  /api/graphs/search      searchGraphs    (hash/code/angle/length search, metadata only)
 //   GET  /api/graphs/recent      listRecentGraphs (metadata only)
@@ -34,9 +35,30 @@
 // reach it," never a hard error (see this task's own "PostgreSQL
 // unavailable must not break plotting" requirement, enforced end-to-end:
 // this layer degrades gracefully, and so does the client that calls it).
+// /health is deliberately outside that DB-touching contract entirely — see
+// its own comment below for why.
+//
+// CORS
+// -----
+// CORS_ORIGIN (a comma-separated list, e.g. your GitHub Pages URL) governs
+// which origins may call this API in production; unset (the local-dev
+// default) allows any origin, matching this server's original
+// architecture-scaffolding behavior. This is the one piece of this file
+// that reads its own environment variable directly rather than going
+// through GraphRepository — CORS is a transport/deployment concern, not
+// business logic.
 
 import { getGraphRepository } from '../repositories/graphRepository.js';
 import { parseListOptions, parseSearchQuery } from './queryParsing.js';
+
+// Read per-request (not cached at module load) so a test can flip
+// process.env.CORS_ORIGIN between cases in the same process — in
+// production this is set once, before the process starts, so there's no
+// behavioral difference, just better testability. '*' (the default)
+// matches this server's original scaffolding behavior — see the module
+// comment above for why tightening it is a deploy-time config choice
+// (CORS_ORIGIN), not a code change.
+const getAllowedOrigins = () => (process.env.CORS_ORIGIN ?? '*').split(',').map((origin) => origin.trim()).filter(Boolean);
 
 const readJsonBody = (req) => new Promise((resolve, reject) => {
   let raw = '';
@@ -52,12 +74,20 @@ const readJsonBody = (req) => new Promise((resolve, reject) => {
   req.on('error', reject);
 });
 
-const withCors = (res) => {
-  // Wide open: this is dev/architecture scaffolding with no auth in front
-  // of it yet (see the `users` table's own migration comment) — tightening
-  // this to a real allowed-origin list is a deployment concern for
-  // whenever this actually goes live, not part of this phase's scope.
-  res.setHeader('Access-Control-Allow-Origin', '*');
+const withCors = (req, res) => {
+  const allowedOrigins = getAllowedOrigins();
+  if (allowedOrigins.includes('*')) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  } else {
+    const origin = req.headers.origin;
+    if (origin && allowedOrigins.includes(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      // Tells caches (browser and any intermediary) that the response
+      // varies by request Origin — required whenever this header echoes
+      // back a specific origin instead of a fixed '*'.
+      res.setHeader('Vary', 'Origin');
+    }
+  }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 };
@@ -76,7 +106,7 @@ const sendJson = (res, status, body) => {
  * api-app.test.mjs).
  */
 export const createApp = (repository) => async (req, res) => {
-  withCors(res);
+  withCors(req, res);
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
     res.end();
@@ -84,6 +114,17 @@ export const createApp = (repository) => async (req, res) => {
   }
 
   const url = new URL(req.url, 'http://localhost');
+
+  // Liveness check for the hosting platform (Render's healthCheckPath —
+  // see render.yaml) and for anyone curling the server to confirm it's up.
+  // Deliberately never touches GraphRepository/Postgres: a platform health
+  // check flapping the service because of a transient DB hiccup would be
+  // worse than a health check that only answers "is this process
+  // responding," which is genuinely all a hosting platform needs to know
+  // before routing traffic to it.
+  if (req.method === 'GET' && url.pathname === '/health') {
+    return sendJson(res, 200, { status: 'ok' });
+  }
 
   try {
     // Metadata-only browse/search routes — checked before the generic
