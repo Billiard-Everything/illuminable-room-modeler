@@ -40,9 +40,16 @@ jobs:
       # Install exactly the dependencies pinned by package-lock.json.
       - name: Install dependencies
         run: npm ci
-      # Produce the static dist/ folder that visitors will receive.
+      # Produce the static dist/ folder that visitors will receive. Vite
+      # bakes VITE_* variables into the bundle at build time (not runtime),
+      # so the deployed backend's URL has to be supplied right here — set
+      # it once in this repo's Settings > Secrets and variables > Actions >
+      # Variables tab (see DEPLOYMENT.md). It's a public URL, not a secret,
+      # which is why this reads it from `vars` rather than `secrets`.
       - name: Build
         run: npm run build
+        env:
+          VITE_GRAPH_API_URL: ${{ vars.VITE_GRAPH_API_URL }}
       # Configure Pages metadata for the deployment.
       - name: Configure Pages
         uses: actions/configure-pages@v6
