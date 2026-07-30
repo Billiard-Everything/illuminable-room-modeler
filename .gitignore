@@ -12,6 +12,13 @@ dist
 dist-ssr
 *.local
 
+# Local/production secrets — never commit real values. See .env.example for
+# the variables this project reads and server/db/pool.js's own comment for
+# how they're used.
+.env
+.env.*
+!.env.example
+
 # Local workspace artifacts
 agents/
 .repo-backups/
