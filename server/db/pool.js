@@ -1,3 +1,5 @@
+import 'dotenv/config';
+
 // Database layer: connection management for the shared graph library's
 // PostgreSQL backend. This is the ONLY module in the whole project allowed
 // to construct a database connection — every other server/** module reaches

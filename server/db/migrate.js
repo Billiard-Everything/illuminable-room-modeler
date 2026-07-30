@@ -51,10 +51,27 @@ export const runMigrations = async (pool, dir = MIGRATIONS_DIR) => {
 // CLI entry point: `node server/db/migrate.js`. Only runs when this file is
 // executed directly (not when imported, e.g. by tests), and only then
 // touches the real shared pool.
-if (import.meta.url === `file://${process.argv[1]}`) {
-  const { getPool, closePool } = await import('./pool.js');
-  const pool = await getPool();
-  const applied = await runMigrations(pool);
-  console.log(applied.length > 0 ? `Applied: ${applied.join(', ')}` : 'Schema already up to date.');
-  await closePool();
+const isDirectRun = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isDirectRun) {
+  const { getPool, closePool, buildPoolConfig } = await import('./pool.js');
+  const config = buildPoolConfig();
+  const target = config.connectionString
+    ? 'DATABASE_URL (redacted)'
+    : `${config.user ?? '<missing user>'}@${config.host ?? 'localhost'}:${config.port ?? 5432}/${config.database ?? '<missing db>'}`;
+
+  console.log(`[migrate] target=${target}`);
+  console.log(`[migrate] migration_dir=${MIGRATIONS_DIR}`);
+  console.log(`[migrate] discovered_files=${listMigrationFiles().length}`);
+
+  try {
+    const pool = await getPool();
+    const applied = await runMigrations(pool);
+    console.log(applied.length > 0 ? `Applied: ${applied.join(', ')}` : 'Schema already up to date.');
+  } catch (err) {
+    console.error('[migrate] failed:', err.message);
+    process.exitCode = 1;
+  } finally {
+    await closePool();
+  }
 }
