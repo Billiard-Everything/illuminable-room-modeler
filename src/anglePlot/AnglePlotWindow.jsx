@@ -585,10 +585,26 @@ export default function AnglePlotWindow({
           // UI (see localGraphDatabaseClient.js/remoteGraphRepository.js's
           // own comments), so a failed or slow save/upload can never affect
           // this row's already-displayed result.
+          // Read fresh row state (title/color/notes/tags/favorite/
+          // visibility can all have changed while this sweep was running)
+          // for both the metadata save below and the display guard further
+          // down — falls back to the closed-over `seq` if the row was
+          // deleted in the meantime, matching startBackgroundExact's own
+          // fresh-read pattern above.
+          const currentSeqForSave = sequencesRef.current.find((s) => s.id === seq.id) ?? seq;
           if (!bgTimeLimited && !uploadAttemptedHashesRef.current.has(exactHash)) {
             uploadAttemptedHashesRef.current.add(exactHash);
             const graphParams = graphParamsFromSequence(seq, baseLength);
-            saveLocalExactGraph(graphParams, GRAPH_HASH_ALGORITHM_VERSION, points, renderInfo.durationMs);
+            // The row's own richer metadata (title/color/notes/tags/
+            // favorite/visibility) rides along to the local GraphDatabase
+            // only — the PostgreSQL shared-library schema has no room for
+            // it (see localGraphDatabaseClient.js's own comment), so
+            // uploadRemoteExactGraph keeps its existing params/points-only
+            // call unchanged.
+            saveLocalExactGraph(graphParams, GRAPH_HASH_ALGORITHM_VERSION, points, renderInfo.durationMs, {
+              title: currentSeqForSave.title, graphColorHex: currentSeqForSave.color, notes: currentSeqForSave.notes,
+              tags: currentSeqForSave.tags, favorite: currentSeqForSave.favorite, visibility: currentSeqForSave.visibility,
+            });
             uploadRemoteExactGraph(graphParams, GRAPH_HASH_ALGORITHM_VERSION, points, renderInfo.durationMs);
           }
           // Still guard the *display* update on this row's own current

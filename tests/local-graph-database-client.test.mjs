@@ -72,6 +72,32 @@ test('saveLocalExactGraph posts params/points/computeTimeMs as JSON', async () =
   assert.deepEqual(JSON.parse(capturedOptions.body), { params, points: [{ a: 1, b: 2 }], computeTimeMs: 500 });
 });
 
+test('saveLocalExactGraph includes title/graphColorHex/notes/tags/favorite/visibility when provided', async () => {
+  let capturedOptions;
+  globalThis.fetch = async (url, options) => { capturedOptions = options; return { ok: true, json: async () => ({ saved: true }) }; };
+  const params = { sequenceText: 'X', angleA: 1, angleB: 2, angleStepInput: '0.1', baseLength: 90 };
+  await saveLocalExactGraph(params, 1, [{ a: 1, b: 2 }], 500, {
+    title: 'My Graph', graphColorHex: '#0284c7', notes: 'some notes', tags: ['a', 'b'], favorite: true, visibility: 'public',
+  });
+  const body = JSON.parse(capturedOptions.body);
+  assert.equal(body.title, 'My Graph');
+  assert.equal(body.graphColorHex, '#0284c7');
+  assert.equal(body.notes, 'some notes');
+  assert.deepEqual(body.tags, ['a', 'b']);
+  assert.equal(body.favorite, true);
+  assert.equal(body.visibility, 'public');
+});
+
+test('saveLocalExactGraph omits title/graphColorHex/notes/tags/favorite/visibility entirely when not provided (not even as null)', async () => {
+  let capturedOptions;
+  globalThis.fetch = async (url, options) => { capturedOptions = options; return { ok: true, json: async () => ({ saved: true }) }; };
+  await saveLocalExactGraph({}, 1, [], null);
+  const body = JSON.parse(capturedOptions.body);
+  for (const key of ['title', 'graphColorHex', 'notes', 'tags', 'favorite', 'visibility']) {
+    assert.ok(!(key in body), `expected "${key}" to be omitted, not present as ${JSON.stringify(body[key])}`);
+  }
+});
+
 test('saveLocalExactGraph never throws when fetch itself rejects', async () => {
   globalThis.fetch = async () => { throw new Error('network down'); };
   await assert.doesNotReject(() => saveLocalExactGraph({}, 1, [], null));

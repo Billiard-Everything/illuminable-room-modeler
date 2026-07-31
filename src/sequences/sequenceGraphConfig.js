@@ -64,8 +64,20 @@ export const colorForSequenceNumber = (number) => (
  * 'sequence') — each apply function only ever reconsiders or clears an
  * error tagged as its own, so e.g. blurring a valid Angle A/B field while a
  * Step error is showing can never blank out that unrelated Step error.
+ *
+ * `title`/`notes`/`tags`/`favorite`/`visibility` mirror the richer metadata
+ * fields the file-based GraphDatabase (server/graphDatabase/graphDatabase.js)
+ * already stores per graph — carried here purely so a row's full metadata
+ * round-trips through workspace persistence and into GraphDatabase's own
+ * saved record (see AnglePlotWindow.jsx's saveLocalExactGraph call) rather
+ * than being silently dropped. No UI currently edits them (they stay at
+ * these defaults until a future feature adds one), matching this project's
+ * "don't invent UI ahead of a real need" convention elsewhere.
  */
-export const createSequenceRow = ({ number, sequenceText = '', angleStepInput = '0.1', angleA = '', angleB = '' }) => ({
+export const createSequenceRow = ({
+  number, sequenceText = '', angleStepInput = '0.1', angleA = '', angleB = '',
+  title = '', notes = '', tags = [], favorite = false, visibility = 'private',
+}) => ({
   id: `seq-${number}`,
   label: `Graph ${number}`,
   sequenceText,
@@ -80,6 +92,11 @@ export const createSequenceRow = ({ number, sequenceText = '', angleStepInput = 
   visible: true,
   validationError: null,
   validationErrorSource: null,
+  title,
+  notes,
+  tags,
+  favorite,
+  visibility,
 });
 
 /**

@@ -1548,6 +1548,15 @@ const normalizeRestoredSequences = (rawSequences) => {
       visible: typeof row?.visible === 'boolean' ? row.visible : true,
       validationError: null,
       validationErrorSource: null,
+      // Richer GraphDatabase-mirroring metadata (see createSequenceRow's own
+      // comment) — same defensive fallback-to-blank-default treatment as
+      // every other field above, for an older/partial save or a hand-edited
+      // localStorage value.
+      title: typeof row?.title === 'string' ? row.title : '',
+      notes: typeof row?.notes === 'string' ? row.notes : '',
+      tags: Array.isArray(row?.tags) ? row.tags.filter((tag) => typeof tag === 'string') : [],
+      favorite: typeof row?.favorite === 'boolean' ? row.favorite : false,
+      visibility: typeof row?.visibility === 'string' ? row.visibility : 'private',
     };
   });
 };

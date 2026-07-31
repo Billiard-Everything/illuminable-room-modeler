@@ -54,15 +54,20 @@ export const fetchLocalExactGraph = async (hash, { timeoutMs = DEFAULT_TIMEOUT_M
  * @param {number} algorithmVersion - graphHasher.js's GRAPH_HASH_ALGORITHM_VERSION (unused server-side; graphDatabase.js derives its own from the same constant — kept for signature parity with uploadRemoteExactGraph).
  * @param {Array} points
  * @param {number|null} durationMs
- * @param {{timeoutMs?: number}} [options]
+ * @param {{timeoutMs?: number, title?: string, graphColorHex?: string, notes?: string, tags?: string[], favorite?: boolean, visibility?: string}} [options] -
+ *   the row's own richer metadata (sequenceGraphConfig.js's createSequenceRow),
+ *   threaded straight through to graphDatabase.js's saveGraph — see that
+ *   module's own buildMetadata for how each is preserved/defaulted server-side.
  * @returns {Promise<void>} never rejects; failures are logged, not thrown.
  */
-export const saveLocalExactGraph = async (params, algorithmVersion, points, durationMs, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) => {
+export const saveLocalExactGraph = async (params, algorithmVersion, points, durationMs, {
+  timeoutMs = DEFAULT_TIMEOUT_MS, title, graphColorHex, notes, tags, favorite, visibility,
+} = {}) => {
   try {
     const res = await fetchWithTimeout(`${apiBaseUrl()}/api/local-graphs`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ params, points, computeTimeMs: durationMs }),
+      body: JSON.stringify({ params, points, computeTimeMs: durationMs, title, graphColorHex, notes, tags, favorite, visibility }),
     }, timeoutMs);
     if (!res.ok) {
       devWarn(`Renderer: local GraphDatabase save returned ${res.status}, exact graph stays uncached locally for now`);
