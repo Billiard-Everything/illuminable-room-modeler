@@ -1,0 +1,31 @@
+# Render "Blueprint" for this project's backend API. Lets you deploy
+# server/api/start.js as a Render web service by clicking "New +" >
+# "Blueprint" in the Render dashboard and pointing it at this repo, instead
+# of filling in every setting by hand. See DEPLOYMENT.md for the full,
+# click-by-click walkthrough (including which values to paste for the two
+# `sync: false` variables below).
+services:
+  - type: web
+    name: illuminable-room-modeler-api
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm install
+    startCommand: npm run server:api
+    healthCheckPath: /health
+    envVars:
+      # Render sets PORT itself; server/api/start.js already reads it.
+      - key: NODE_ENV
+        value: production
+      # Paste your Supabase connection string here in the Render dashboard
+      # (Project Settings > Database > Connection string > URI). Never
+      # committed to this file — `sync: false` makes Render prompt for it
+      # instead.
+      - key: DATABASE_URL
+        sync: false
+      # Paste your GitHub Pages URL here (e.g.
+      # https://your-username.github.io) once you know it, so the API only
+      # accepts requests from your deployed frontend. Leave blank (or set
+      # to *) while you're still setting things up.
+      - key: CORS_ORIGIN
+        sync: false

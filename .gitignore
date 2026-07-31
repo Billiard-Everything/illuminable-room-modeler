@@ -12,9 +12,22 @@ dist
 dist-ssr
 *.local
 
+# Local/production secrets — never commit real values. See .env.example for
+# the variables this project reads and server/db/pool.js's own comment for
+# how they're used.
+.env
+.env.*
+!.env.example
+
 # Local workspace artifacts
 agents/
 .repo-backups/
+
+# The file-based GraphDatabase's own data (server/graphDatabase/) — every
+# saved graph's metadata.json/points.json/notes.md. User-generated data,
+# not source; defaults to ./GraphLibrary unless GRAPH_LIBRARY_DIR points
+# elsewhere.
+/GraphLibrary/
 
 # Editor directories and files
 .vscode/*

@@ -224,3 +224,57 @@ test('browse/search/recent routes never return a `points` field, even if the rep
   assert.ok(!('points' in body.graphs[0]));
   server.close();
 });
+
+// --- /health and CORS_ORIGIN (deployment) ---------------------------------
+
+test('GET /health returns 200 { status: "ok" } without touching the repository', async () => {
+  let repositoryTouched = false;
+  const { server, baseUrl } = await startTestServer(createFakeRepository({
+    listGraphs: async () => { repositoryTouched = true; return []; },
+  }));
+  const res = await fetch(`${baseUrl}/health`);
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { status: 'ok' });
+  assert.equal(repositoryTouched, false);
+  server.close();
+});
+
+test('with CORS_ORIGIN unset, Access-Control-Allow-Origin is a wildcard (local-dev default)', async () => {
+  const original = process.env.CORS_ORIGIN;
+  delete process.env.CORS_ORIGIN;
+  try {
+    const { server, baseUrl } = await startTestServer(createFakeRepository());
+    const res = await fetch(`${baseUrl}/health`);
+    assert.equal(res.headers.get('access-control-allow-origin'), '*');
+    server.close();
+  } finally {
+    if (original !== undefined) process.env.CORS_ORIGIN = original;
+  }
+});
+
+test('with CORS_ORIGIN set, a matching request Origin is echoed back with Vary: Origin', async () => {
+  const original = process.env.CORS_ORIGIN;
+  process.env.CORS_ORIGIN = 'https://example.github.io,https://other.example';
+  try {
+    const { server, baseUrl } = await startTestServer(createFakeRepository());
+    const res = await fetch(`${baseUrl}/health`, { headers: { Origin: 'https://example.github.io' } });
+    assert.equal(res.headers.get('access-control-allow-origin'), 'https://example.github.io');
+    assert.equal(res.headers.get('vary'), 'Origin');
+    server.close();
+  } finally {
+    if (original === undefined) delete process.env.CORS_ORIGIN; else process.env.CORS_ORIGIN = original;
+  }
+});
+
+test('with CORS_ORIGIN set, a non-matching request Origin gets no Access-Control-Allow-Origin header', async () => {
+  const original = process.env.CORS_ORIGIN;
+  process.env.CORS_ORIGIN = 'https://example.github.io';
+  try {
+    const { server, baseUrl } = await startTestServer(createFakeRepository());
+    const res = await fetch(`${baseUrl}/health`, { headers: { Origin: 'https://not-allowed.example' } });
+    assert.equal(res.headers.get('access-control-allow-origin'), null);
+    server.close();
+  } finally {
+    if (original === undefined) delete process.env.CORS_ORIGIN; else process.env.CORS_ORIGIN = original;
+  }
+});
