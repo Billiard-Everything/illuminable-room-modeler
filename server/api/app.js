@@ -22,19 +22,31 @@
 //   GET  /api/graphs/recent      listRecentGraphs (metadata only)
 //   GET  /api/graphs/:hash       getGraphWithGeometry (download — the one route that returns geometry)
 //   POST /api/graphs             uploadExactGraphIfMissing
-//   GET  /api/local-graphs/:hash graphDatabase.loadGraph  (file-based local GraphDatabase — permanent cache)
-//   POST /api/local-graphs       graphDatabase.saveGraph
+//   GET    /api/local-graphs        graphDatabase.listGraphs    (browse/sort, metadata only)
+//   GET    /api/local-graphs/search graphDatabase.searchGraphs  (title/code/angle/tag/favorite search, metadata only)
+//   GET    /api/local-graphs/:hash  graphDatabase.loadGraph     (file-based local GraphDatabase — permanent cache; the one route that returns points)
+//   POST   /api/local-graphs        graphDatabase.saveGraph
+//   PATCH  /api/local-graphs/:hash  graphDatabase.updateGraphMetadata (rename/favorite/tags/notes/visibility/color — never points)
+//   DELETE /api/local-graphs/:hash  graphDatabase.deleteGraph
 // The three metadata-only routes are matched before the generic
 // `/api/graphs/:hash` fallback specifically so a hash can never collide
 // with a literal path segment like "search" or "recent" (a real hash is a
-// long, structured string that URL-encodes distinctly from either).
+// long, structured string that URL-encodes distinctly from either); the
+// same reasoning is why GET /api/local-graphs/search is checked before the
+// generic GET /api/local-graphs/:hash fallback below.
 //
 // /api/local-graphs is a distinct prefix, not a variant of /api/graphs, so
 // it can never collide with the PostgreSQL-backed routes above — it talks
 // to a completely separate storage system (the file-based GraphDatabase,
-// server/graphDatabase/graphDatabase.js) used as this app's permanent
-// local render cache (see AnglePlotWindow.jsx's STEP 2b/STEP 4), which is
-// additive to — never a replacement for — the shared PostgreSQL library.
+// server/graphDatabase/graphDatabase.js) used both as this app's permanent
+// local render cache (see AnglePlotWindow.jsx's STEP 2b/STEP 4) and,
+// starting with the Graph Database browser (src/graphLibrary/**), as a
+// full local library with search/sort/rename/delete/favorite/tags/notes —
+// none of which make sense on the multi-user PostgreSQL-backed library
+// (you can't rename or delete a graph another user shared), which is why
+// this stays a completely separate route family rather than an extension
+// of /api/graphs. Additive to — never a replacement for — that shared
+// library.
 //
 // Failure handling
 // -----------------
@@ -59,6 +71,7 @@
 
 import { getGraphRepository } from '../repositories/graphRepository.js';
 import { parseListOptions, parseSearchQuery } from './queryParsing.js';
+import { parseLocalListOptions, parseLocalSearchQuery } from './localGraphQueryParsing.js';
 import { graphDatabase as defaultGraphDatabase } from '../graphDatabase/graphDatabase.js';
 
 // Read per-request (not cached at module load) so a test can flip
@@ -98,7 +111,7 @@ const withCors = (req, res) => {
       res.setHeader('Vary', 'Origin');
     }
   }
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 };
 
@@ -183,6 +196,23 @@ export const createApp = (repository, { graphDatabase: graphDb = defaultGraphDat
       return sendJson(res, 200, result);
     }
 
+    // Local file-based GraphDatabase's own metadata-only browse/search —
+    // mirrors the PostgreSQL routes' own "metadata only while browsing"
+    // rule (graphDatabase.js's listGraphs/searchGraphs never return
+    // points, same as GraphRepository's queryGraphs). Checked before the
+    // generic GET /api/local-graphs/:hash fallback below (see this file's
+    // own route-table comment).
+    if (req.method === 'GET' && url.pathname === '/api/local-graphs') {
+      const graphs = await graphDb.listGraphs(parseLocalListOptions(url.searchParams));
+      return sendJson(res, 200, { graphs });
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/local-graphs/search') {
+      const query = parseLocalSearchQuery(url.searchParams);
+      const graphs = await graphDb.searchGraphs(query, parseLocalListOptions(url.searchParams));
+      return sendJson(res, 200, { graphs });
+    }
+
     // Local file-based GraphDatabase — the permanent render cache. Same
     // shape as the PostgreSQL download route ({exists, graph} vs.
     // {exists: false}), just a different backing store and a `graph`
@@ -202,6 +232,33 @@ export const createApp = (repository, { graphDatabase: graphDb = defaultGraphDat
       }
       const graph = await graphDb.saveGraph(body);
       return sendJson(res, 200, { saved: true, graph });
+    }
+
+    // Metadata-only edit (rename/favorite/tags/notes/visibility/color) for
+    // the Graph Database browser — never touches points.json (see
+    // graphDatabase.js's own updateGraphMetadata). 404s (not 503) for a
+    // hash that was never saved, since that's a client mistake (a stale
+    // card, or a hash that was already deleted), not a storage failure.
+    if (req.method === 'PATCH' && url.pathname.startsWith('/api/local-graphs/')) {
+      const hash = decodeURIComponent(url.pathname.slice('/api/local-graphs/'.length));
+      if (!hash) return sendJson(res, 400, { error: 'missing hash' });
+      const body = await readJsonBody(req);
+      if (!(await graphDb.graphExists(hash))) return sendJson(res, 404, { error: 'no graph stored for this hash' });
+      const metadata = await graphDb.updateGraphMetadata(hash, body);
+      return sendJson(res, 200, { updated: true, metadata });
+    }
+
+    // Delete a graph from the local library entirely (metadata, points,
+    // and notes together — see graphDatabase.js's own deleteGraph). Always
+    // 200 { deleted: true }, even if the hash was never stored: deleting
+    // something that's already gone is exactly the state the caller
+    // wanted, not an error (same idempotent-delete convention as most REST
+    // APIs' DELETE routes).
+    if (req.method === 'DELETE' && url.pathname.startsWith('/api/local-graphs/')) {
+      const hash = decodeURIComponent(url.pathname.slice('/api/local-graphs/'.length));
+      if (!hash) return sendJson(res, 400, { error: 'missing hash' });
+      await graphDb.deleteGraph(hash);
+      return sendJson(res, 200, { deleted: true });
     }
 
     sendJson(res, 404, { error: 'not found' });

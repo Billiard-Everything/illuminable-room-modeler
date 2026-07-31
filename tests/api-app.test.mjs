@@ -23,6 +23,11 @@ const createFakeRepository = (overrides = {}) => ({
 const createFakeGraphDatabase = (overrides = {}) => ({
   loadGraph: async () => null,
   saveGraph: async (input) => ({ id: 'g1', hash: 'h1', metadata: {}, points: input.points, notes: '' }),
+  listGraphs: async () => [],
+  searchGraphs: async () => [],
+  graphExists: async () => true,
+  updateGraphMetadata: async (hash, updates) => ({ hash, ...updates }),
+  deleteGraph: async () => {},
   ...overrides,
 });
 
@@ -322,6 +327,98 @@ test('/api/local-graphs never collides with /api/graphs (the PostgreSQL-backed r
   await fetch(`${baseUrl}/api/local-graphs/h1`);
   assert.equal(dbCalled, true);
   assert.equal(repoCalled, false);
+  server.close();
+});
+
+// --- Graph Database browser: browse/search/rename/favorite/delete --------
+
+test('GET /api/local-graphs calls listGraphs with parsed sort/limit/offset and returns { graphs } (metadata only)', async () => {
+  let receivedOptions = null;
+  const graphs = [{ hash: 'h1', pointCount: 10 }];
+  const { server, baseUrl } = await startTestServer(createFakeRepository(), {
+    graphDatabase: createFakeGraphDatabase({ listGraphs: async (options) => { receivedOptions = options; return graphs; } }),
+  });
+  const res = await fetch(`${baseUrl}/api/local-graphs?sort=oldest&limit=5`);
+  const body = await res.json();
+  assert.equal(res.status, 200);
+  assert.deepEqual(body, { graphs });
+  assert.deepEqual(receivedOptions, { sortBy: 'createdAt', order: 'asc', limit: 5 });
+  server.close();
+});
+
+test('GET /api/local-graphs/search calls searchGraphs with the parsed query and list options, and is matched before the generic :hash route', async () => {
+  let receivedQuery = null;
+  let receivedOptions = null;
+  let hashRouteCalled = false;
+  const { server, baseUrl } = await startTestServer(createFakeRepository(), {
+    graphDatabase: createFakeGraphDatabase({
+      searchGraphs: async (query, options) => { receivedQuery = query; receivedOptions = options; return []; },
+      loadGraph: async () => { hashRouteCalled = true; return null; },
+    }),
+  });
+  const res = await fetch(`${baseUrl}/api/local-graphs/search?code=RRL&angleA=15&sort=title_asc&favorite=true`);
+  const body = await res.json();
+  assert.equal(res.status, 200);
+  assert.deepEqual(body, { graphs: [] });
+  assert.deepEqual(receivedQuery, { codeSequence: 'RRL', angleA: 15, favorite: true });
+  assert.deepEqual(receivedOptions, { sortBy: 'title', order: 'asc' });
+  assert.equal(hashRouteCalled, false, '"search" must never be treated as a hash by the download route');
+  server.close();
+});
+
+test('PATCH /api/local-graphs/:hash updates metadata via updateGraphMetadata and returns { updated: true, metadata }', async () => {
+  let receivedHash = null;
+  let receivedUpdates = null;
+  const { server, baseUrl } = await startTestServer(createFakeRepository(), {
+    graphDatabase: createFakeGraphDatabase({
+      updateGraphMetadata: async (hash, updates) => { receivedHash = hash; receivedUpdates = updates; return { hash, ...updates }; },
+    }),
+  });
+  const res = await fetch(`${baseUrl}/api/local-graphs/h1`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ favorite: true, title: 'Renamed' }),
+  });
+  const body = await res.json();
+  assert.equal(res.status, 200);
+  assert.deepEqual(body, { updated: true, metadata: { hash: 'h1', favorite: true, title: 'Renamed' } });
+  assert.equal(receivedHash, 'h1');
+  assert.deepEqual(receivedUpdates, { favorite: true, title: 'Renamed' });
+  server.close();
+});
+
+test('PATCH /api/local-graphs/:hash returns 404 (not 503) for a hash that was never saved', async () => {
+  let updateCalled = false;
+  const { server, baseUrl } = await startTestServer(createFakeRepository(), {
+    graphDatabase: createFakeGraphDatabase({
+      graphExists: async () => false,
+      updateGraphMetadata: async () => { updateCalled = true; },
+    }),
+  });
+  const res = await fetch(`${baseUrl}/api/local-graphs/missing-hash`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ favorite: true }),
+  });
+  assert.equal(res.status, 404);
+  assert.equal(updateCalled, false);
+  server.close();
+});
+
+test('DELETE /api/local-graphs/:hash deletes via the GraphDatabase and returns { deleted: true }', async () => {
+  let receivedHash = null;
+  const { server, baseUrl } = await startTestServer(createFakeRepository(), {
+    graphDatabase: createFakeGraphDatabase({ deleteGraph: async (hash) => { receivedHash = hash; } }),
+  });
+  const res = await fetch(`${baseUrl}/api/local-graphs/h1`, { method: 'DELETE' });
+  const body = await res.json();
+  assert.equal(res.status, 200);
+  assert.deepEqual(body, { deleted: true });
+  assert.equal(receivedHash, 'h1');
+  server.close();
+});
+
+test('DELETE /api/local-graphs/:hash returns 200 { deleted: true } even for a hash that was never saved (idempotent)', async () => {
+  const { server, baseUrl } = await startTestServer(createFakeRepository(), { graphDatabase: createFakeGraphDatabase() });
+  const res = await fetch(`${baseUrl}/api/local-graphs/never-saved`, { method: 'DELETE' });
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { deleted: true });
   server.close();
 });
 

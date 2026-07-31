@@ -157,6 +157,50 @@ test('renameGraph throws for a hash that was never saved', async () => {
   await assert.rejects(() => db.renameGraph('never-saved-hash', 'X'));
 });
 
+test('updateGraphMetadata changes only the fields provided, leaving everything else (including notes) untouched', async () => {
+  const saved = await db.saveGraph({
+    params: params(), points: points(), title: 'Old Title', tags: ['a'], favorite: false, notes: 'original notes',
+  });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const updated = await db.updateGraphMetadata(saved.hash, { favorite: true });
+  assert.equal(updated.favorite, true);
+  assert.equal(updated.title, 'Old Title');
+  assert.deepEqual(updated.tags, ['a']);
+  assert.notEqual(updated.modifiedAt, saved.metadata.modifiedAt);
+  assert.equal(updated.id, saved.id);
+  assert.equal(updated.createdAt, saved.metadata.createdAt);
+
+  const reloaded = await db.loadGraph(saved.hash);
+  assert.equal(reloaded.notes, 'original notes', 'notes must be untouched when not provided');
+});
+
+test('updateGraphMetadata updates title/tags/favorite/visibility/graphColorHex/notes together in one call', async () => {
+  const saved = await db.saveGraph({ params: params(), points: points() });
+  const updated = await db.updateGraphMetadata(saved.hash, {
+    title: 'New Title', tags: ['x', 'y'], favorite: true, visibility: GRAPH_VISIBILITY.PUBLIC,
+    graphColorHex: '#123456', notes: 'new notes',
+  });
+  assert.equal(updated.title, 'New Title');
+  assert.deepEqual(updated.tags, ['x', 'y']);
+  assert.equal(updated.favorite, true);
+  assert.equal(updated.visibility, GRAPH_VISIBILITY.PUBLIC);
+  assert.equal(updated.graphColorHex, '#123456');
+
+  const reloaded = await db.loadGraph(saved.hash);
+  assert.equal(reloaded.notes, 'new notes');
+});
+
+test('updateGraphMetadata never touches points.json', async () => {
+  const saved = await db.saveGraph({ params: params(), points: points() });
+  await db.updateGraphMetadata(saved.hash, { title: 'Renamed' });
+  const reloaded = await db.loadGraph(saved.hash);
+  assert.deepEqual(reloaded.points, points());
+});
+
+test('updateGraphMetadata throws for a hash that was never saved', async () => {
+  await assert.rejects(() => db.updateGraphMetadata('never-saved-hash', { favorite: true }));
+});
+
 test('listGraphs returns metadata only (never a points field) for every saved graph', async () => {
   await db.saveGraph({ params: params({ angleA: 15 }), points: points() });
   await db.saveGraph({ params: params({ angleA: 16 }), points: points() });
