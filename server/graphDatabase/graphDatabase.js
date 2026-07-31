@@ -161,17 +161,51 @@ export const createGraphDatabase = (baseDir) => {
     /**
      * Changes a graph's display `title` — never its hash or directory,
      * which stay permanent/content-derived (see this module's own header
-     * comment on graph identity). Throws if the graph doesn't exist.
+     * comment on graph identity). Throws if the graph doesn't exist. A thin
+     * wrapper over updateGraphMetadata, kept as its own method since "rename"
+     * is the one metadata edit with dedicated UI (the Graph Database
+     * browser's rename action) and its own, narrower single-argument shape.
      *
      * @returns {Promise<object>} the updated metadata.
      */
     async renameGraph(hash, newTitle) {
+      return this.updateGraphMetadata(hash, { title: newTitle });
+    },
+
+    /**
+     * Partial-updates a graph's metadata.json (title/description/author/
+     * graphColorHex/tags/favorite/visibility) and, if `notes` is provided,
+     * its notes.md — never its hash/directory/points.json/createdAt, which
+     * stay permanent (see this module's own header comment on graph
+     * identity; only saveGraph ever rewrites points.json, since that's the
+     * one file a metadata-only edit has no business touching). Every field
+     * is optional and independently defaulted to its current value when
+     * omitted, so a caller can change just one field (e.g. only toggling
+     * `favorite`) without needing to first read back and resend everything
+     * else. Throws if the graph doesn't exist, matching renameGraph's own
+     * existing contract.
+     *
+     * @param {{title?: string, description?: string, author?: string|null, graphColorHex?: string|null, tags?: string[], favorite?: boolean, visibility?: string, notes?: string}} updates
+     * @returns {Promise<object>} the updated metadata (never notes/points — see loadGraph for the full object).
+     */
+    async updateGraphMetadata(hash, { title, description, author, graphColorHex, tags, favorite, visibility, notes } = {}) {
       const dir = dirFor(hash);
       const metadataPath = path.join(dir, METADATA_FILE);
       const metadata = await readJsonIfExists(metadataPath);
       if (!metadata) throw new Error(`No graph stored for hash: ${hash}`);
-      const updated = { ...metadata, title: newTitle, modifiedAt: new Date().toISOString() };
+      const updated = {
+        ...metadata,
+        title: title !== undefined ? title : metadata.title,
+        description: description !== undefined ? description : metadata.description,
+        author: author !== undefined ? author : metadata.author,
+        graphColorHex: graphColorHex !== undefined ? graphColorHex : metadata.graphColorHex,
+        tags: tags !== undefined ? tags : metadata.tags,
+        favorite: favorite !== undefined ? favorite : metadata.favorite,
+        visibility: visibility !== undefined ? visibility : metadata.visibility,
+        modifiedAt: new Date().toISOString(),
+      };
       await atomicWriteJson(metadataPath, updated);
+      if (notes !== undefined) await atomicWriteFile(path.join(dir, NOTES_FILE), notes);
       return updated;
     },
 

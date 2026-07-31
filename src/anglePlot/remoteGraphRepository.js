@@ -22,6 +22,8 @@
 // feature already makes — see startSequenceJob's own comment on where
 // this sits in the pipeline.
 
+import { apiBaseUrl, devLog, devWarn, fetchWithTimeout } from './apiClientUtils.js';
+
 const DEFAULT_TIMEOUT_MS = 600;
 
 // Browsing/searching the shared library (server/api/app.js's GET
@@ -32,24 +34,6 @@ const DEFAULT_TIMEOUT_MS = 600;
 // up, without any of the "instant preview" pressure that timeout exists
 // for.
 const LIBRARY_TIMEOUT_MS = 5000;
-
-// import.meta.env is Vite-injected and undefined under plain Node (e.g.
-// this module's own tests) — optional-chained throughout, matching
-// workspaceManager.js's own established fix for the same gotcha.
-const apiBaseUrl = () => import.meta.env?.VITE_GRAPH_API_URL || 'http://localhost:8787';
-
-const devLog = (...args) => { if (import.meta.env?.DEV) console.log(...args); };
-const devWarn = (...args) => { if (import.meta.env?.DEV) console.warn(...args); };
-
-const fetchWithTimeout = async (url, options, timeoutMs) => {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(url, { ...options, signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
-};
 
 /**
  * Looks up the exact geometry for `hash` in the shared PostgreSQL library.

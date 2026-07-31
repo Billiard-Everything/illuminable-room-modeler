@@ -31,6 +31,26 @@ test('createSequenceRow defaults to an empty sequence and a usable Angle Step', 
   assert.equal(row.angleStepInput, '0.1');
 });
 
+test('createSequenceRow defaults the richer GraphDatabase-mirroring metadata to blank/false/private', () => {
+  const row = createSequenceRow({ number: 1 });
+  assert.equal(row.title, '');
+  assert.equal(row.notes, '');
+  assert.deepEqual(row.tags, []);
+  assert.equal(row.favorite, false);
+  assert.equal(row.visibility, 'private');
+});
+
+test('createSequenceRow accepts explicit title/notes/tags/favorite/visibility', () => {
+  const row = createSequenceRow({
+    number: 1, title: 'My Graph', notes: 'some notes', tags: ['a', 'b'], favorite: true, visibility: 'public',
+  });
+  assert.equal(row.title, 'My Graph');
+  assert.equal(row.notes, 'some notes');
+  assert.deepEqual(row.tags, ['a', 'b']);
+  assert.equal(row.favorite, true);
+  assert.equal(row.visibility, 'public');
+});
+
 test('two rows created with different numbers never collide on id or default color pairing', () => {
   const first = createSequenceRow({ number: 1 });
   const second = createSequenceRow({ number: 2 });

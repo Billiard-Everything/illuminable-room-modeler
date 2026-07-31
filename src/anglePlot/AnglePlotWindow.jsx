@@ -10,6 +10,7 @@ import { truncateSequenceText } from '../sequences/sequenceGraphConfig.js';
 import { graphCache, buildGraphCacheKey } from './graphCache.js';
 import { hashGraph, GRAPH_HASH_ALGORITHM_VERSION } from './graphHasher.js';
 import { fetchRemoteExactGraph, uploadRemoteExactGraph } from './remoteGraphRepository.js';
+import { fetchLocalExactGraph, saveLocalExactGraph } from './localGraphDatabaseClient.js';
 import { primeExactGraphCache } from './exactGraphCaching.js';
 import {
   requestExactComputation, isExactComputationRunning, updateBackgroundJobPriority,
@@ -267,15 +268,16 @@ export default function AnglePlotWindow({
   // comment above). Never cleared on delete: a deleted row's id isn't
   // reused, so a stale entry is inert, not a correctness risk.
   const everRequestedExactIdsRef = useRef(new Set());
-  // Exact hashes already confirmed absent from the shared PostgreSQL
-  // library this session (see remoteGraphRepository.js) — checked at most
-  // once per hash so a row still on PREVIEW status doesn't re-query it on
-  // every pan/zoom-driven re-render (handleViewChange keeps rescheduling
-  // non-EXACT rows exactly as before). A hash that later gets uploaded by
-  // this same session's own background-exact completion never needs this
-  // invalidated: that upload's own local GraphCache.set happens first, so
-  // any row sharing that hash hits GraphCache (STEP 2) before ever
-  // reaching this set's check again.
+  // Exact hashes already confirmed absent from BOTH the permanent local
+  // GraphDatabase (localGraphDatabaseClient.js) and the shared PostgreSQL
+  // library (remoteGraphRepository.js) this session — checked at most once
+  // per hash so a row still on PREVIEW status doesn't re-query either one
+  // on every pan/zoom-driven re-render (handleViewChange keeps
+  // rescheduling non-EXACT rows exactly as before). A hash that later gets
+  // saved by this same session's own background-exact completion never
+  // needs this invalidated: that save's own local GraphCache.set happens
+  // first, so any row sharing that hash hits GraphCache (STEP 2) before
+  // ever reaching this set's check again.
   const remoteMissesRef = useRef(new Set());
   // Exact hashes this session has already attempted to upload — set the
   // moment an upload is attempted (not once it succeeds), so a hash shared
@@ -361,21 +363,26 @@ export default function AnglePlotWindow({
   // independent) entry. A hit is used immediately and nothing is computed
   // at all — not adaptive, not a background job, not even a network call —
   // since the full, permanent answer already exists locally.
-  // STEP 2b (new): on a local miss, ask the shared PostgreSQL library (via
-  // remoteGraphRepository.js's fetchRemoteExactGraph, never SQL directly —
+  // STEP 2b (new): on a local (browser) GraphCache miss, ask the two
+  // server-side stores — the permanent local GraphDatabase
+  // (localGraphDatabaseClient.js's fetchLocalExactGraph, the file-based
+  // points.json cache) and the shared PostgreSQL library
+  // (remoteGraphRepository.js's fetchRemoteExactGraph, never SQL directly —
   // see server/repositories/graphRepository.js for the only module that
-  // executes any) whether some *other* session has already computed this
-  // exact hash. A hit is written into GraphCache (so a replot, or a
+  // executes any) — CONCURRENTLY (Promise.all), so a miss on both waits for
+  // only the slower of the two, not their sum. Either one resolving is
+  // enough: its points are written into GraphCache (so a replot, or a
   // different row sharing this hash, never asks again) and displayed
   // immediately, skipping adaptive and brute-force entirely — the whole
-  // point of a permanent, content-addressed hash. A miss, timeout, or any
-  // failure (API not running, database down) is indistinguishable to this
-  // function — see remoteGraphRepository.js's own comment — and simply
-  // falls through to STEP 3 exactly as if this feature didn't exist, which
-  // is what keeps "PostgreSQL unavailable" from ever breaking plotting.
-  // remoteMissesRef bounds this to at most one remote check per hash per
-  // session, so a row still on PREVIEW status doesn't re-ask on every
-  // pan/zoom-driven re-render.
+  // point of a permanent, content-addressed hash (requirement: a hash that
+  // already has cached points must never be recomputed). A miss, timeout,
+  // or any failure (API not running, database/disk unavailable) from
+  // either check is indistinguishable from "not found" — see each client's
+  // own comment — and simply falls through to STEP 3 exactly as if this
+  // feature didn't exist, which is what keeps either store being
+  // unavailable from ever breaking plotting. remoteMissesRef bounds this to
+  // at most one check of each store per hash per session, so a row still on
+  // PREVIEW status doesn't re-ask on every pan/zoom-driven re-render.
   // STEP 3: on a local *and* remote miss, the existing viewport-scoped
   // adaptive path runs exactly as before (own cache key, own generator, own
   // progress reporting) so the user sees *something* as fast as this app
@@ -439,14 +446,18 @@ export default function AnglePlotWindow({
       return;
     }
 
-    // STEP 2b: no local exact entry — ask the shared PostgreSQL library
-    // before falling back to adaptive/brute-force (see this function's own
-    // module comment). Bounded to one remote check per hash per session
-    // via remoteMissesRef; any failure (down, unreachable, timed out) is
-    // indistinguishable from "not found" here, by remoteGraphRepository.js's
-    // own design, so this always safely falls through to STEP 3.
+    // STEP 2b: no local (browser) exact entry — ask the permanent local
+    // GraphDatabase and the shared PostgreSQL library concurrently before
+    // falling back to adaptive/brute-force (see this function's own module
+    // comment). Bounded to one check of each per hash per session via
+    // remoteMissesRef; any failure (down, unreachable, timed out) is
+    // indistinguishable from "not found" here, by each client's own design,
+    // so this always safely falls through to STEP 3.
     if (!remoteMissesRef.current.has(exactHash)) {
-      const remoteResult = await fetchRemoteExactGraph(exactHash);
+      const [localResult, remoteResult] = await Promise.all([
+        fetchLocalExactGraph(exactHash),
+        fetchRemoteExactGraph(exactHash),
+      ]);
       // This row may have been edited (or deleted/hidden) while the network
       // call was in flight — jobRequestIdRef's usual staleness guard (see
       // the adaptive task's own `.then` below) applies here too; a newer
@@ -455,15 +466,20 @@ export default function AnglePlotWindow({
         finishSlot();
         return;
       }
-      if (remoteResult) {
+      // Local (the permanent points.json cache) wins on a double hit — it's
+      // this feature's own primary cache, and preferring it costs nothing
+      // since both checks already ran concurrently.
+      const cacheHit = localResult || remoteResult;
+      if (cacheHit) {
         // primeExactGraphCache (exactGraphCaching.js) builds renderInfo and
         // writes GraphCache in one call — the same helper the Graph
-        // Library's "Load Graph" action uses, so a PostgreSQL-sourced
-        // graph's cache entry has one shape regardless of which of the two
-        // ever-diverging call sites actually populated it.
-        const renderInfo = primeExactGraphCache(exactHash, seq.angleStepInput, remoteResult);
-        if (import.meta.env.DEV) console.log(`Renderer: Cache Hit (PostgreSQL) — ${seq.label} (${remoteResult.points.length} points reused)`);
-        setRowResult(seq.id, { points: remoteResult.points, status: 'done', renderInfo: { ...renderInfo, fromCache: true } });
+        // Library's "Load Graph" action uses, so a cache-sourced graph's
+        // cache entry has one shape regardless of which of the
+        // ever-diverging call sites (or, now, which store) populated it.
+        const renderInfo = primeExactGraphCache(exactHash, seq.angleStepInput, cacheHit);
+        const source = localResult ? 'local GraphDatabase' : 'PostgreSQL';
+        if (import.meta.env.DEV) console.log(`Renderer: Cache Hit (${source}) — ${seq.label} (${cacheHit.points.length} points reused)`);
+        setRowResult(seq.id, { points: cacheHit.points, status: 'done', renderInfo: { ...renderInfo, fromCache: true } });
         finishSlot();
         return;
       }
@@ -549,24 +565,47 @@ export default function AnglePlotWindow({
           // the cache write below is safe and useful.
           graphCache.set(exactHash, { points, renderInfo });
           if (import.meta.env.DEV) console.log(`Renderer: Background Exact complete — ${seq.label} (${points.length} points, ${renderInfo.durationMs.toFixed(0)}ms)`);
-          // Upload to the shared PostgreSQL library — but only once per
-          // hash per session (uploadAttemptedHashesRef; a hash shared by
-          // several rows would otherwise fire one upload attempt per
-          // subscriber, since each gets its own onResult call for the same
-          // completed job — see backgroundExactWorker.js), and only for a
-          // genuinely complete sweep: `bgTimeLimited` means
+          // Save to the permanent local GraphDatabase AND upload to the
+          // shared PostgreSQL library — but only once per hash per session
+          // (uploadAttemptedHashesRef; a hash shared by several rows would
+          // otherwise fire one save/upload attempt per subscriber, since
+          // each gets its own onResult call for the same completed job —
+          // see backgroundExactWorker.js), and only for a genuinely
+          // complete sweep: `bgTimeLimited` means
           // MAX_BACKGROUND_EXACT_RENDER_MS cut this sweep short before it
           // covered the whole domain, so it is not the true exact geometry
-          // for this permanent hash — uploading it would store a wrong
-          // answer under a hash nothing can ever correct later. The upload
-          // itself is fire-and-forget from this call site's perspective:
-          // uploadRemoteExactGraph never throws and never blocks the UI
-          // (see remoteGraphRepository.js's own comment), so a failed or
-          // slow upload can never affect this row's already-displayed
-          // result.
+          // for this permanent hash — persisting it would store a wrong
+          // answer under a hash nothing can ever correct later. This is the
+          // point this feature's own permanent cache is written: once
+          // brute-force finishes (uncancelled, untruncated), its points
+          // become the permanent cached version for this hash, so any
+          // future request for it (this session or a later one) hits STEP
+          // 2b instead of recomputing. Both calls are fire-and-forget from
+          // this call site's perspective: neither ever throws or blocks the
+          // UI (see localGraphDatabaseClient.js/remoteGraphRepository.js's
+          // own comments), so a failed or slow save/upload can never affect
+          // this row's already-displayed result.
+          // Read fresh row state (title/color/notes/tags/favorite/
+          // visibility can all have changed while this sweep was running)
+          // for both the metadata save below and the display guard further
+          // down — falls back to the closed-over `seq` if the row was
+          // deleted in the meantime, matching startBackgroundExact's own
+          // fresh-read pattern above.
+          const currentSeqForSave = sequencesRef.current.find((s) => s.id === seq.id) ?? seq;
           if (!bgTimeLimited && !uploadAttemptedHashesRef.current.has(exactHash)) {
             uploadAttemptedHashesRef.current.add(exactHash);
-            uploadRemoteExactGraph(graphParamsFromSequence(seq, baseLength), GRAPH_HASH_ALGORITHM_VERSION, points, renderInfo.durationMs);
+            const graphParams = graphParamsFromSequence(seq, baseLength);
+            // The row's own richer metadata (title/color/notes/tags/
+            // favorite/visibility) rides along to the local GraphDatabase
+            // only — the PostgreSQL shared-library schema has no room for
+            // it (see localGraphDatabaseClient.js's own comment), so
+            // uploadRemoteExactGraph keeps its existing params/points-only
+            // call unchanged.
+            saveLocalExactGraph(graphParams, GRAPH_HASH_ALGORITHM_VERSION, points, renderInfo.durationMs, {
+              title: currentSeqForSave.title, graphColorHex: currentSeqForSave.color, notes: currentSeqForSave.notes,
+              tags: currentSeqForSave.tags, favorite: currentSeqForSave.favorite, visibility: currentSeqForSave.visibility,
+            });
+            uploadRemoteExactGraph(graphParams, GRAPH_HASH_ALGORITHM_VERSION, points, renderInfo.durationMs);
           }
           // Still guard the *display* update on this row's own current
           // params, since a shared job's result is only this row's to show
