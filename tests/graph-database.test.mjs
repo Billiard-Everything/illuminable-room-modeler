@@ -1,0 +1,257 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { createGraphDatabase, GRAPH_VISIBILITY } from '../server/graphDatabase/graphDatabase.js';
+import { graphDirName } from '../server/graphDatabase/graphFileStore.js';
+import { hashGraph } from '../src/anglePlot/graphHasher.js';
+
+const params = (overrides = {}) => ({
+  sequenceText: '3 1 7 2 6 2 8 2 4 2', angleA: 15, angleB: 50, angleStepInput: '0.1', baseLength: 90, ...overrides,
+});
+const points = () => [{ a: 10, b: 20 }, { a: 30, b: 40 }, { a: 5, b: 60 }];
+
+let tempDir;
+let db;
+test.beforeEach(async () => {
+  tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'graph-database-test-'));
+  db = createGraphDatabase(tempDir);
+});
+test.afterEach(async () => {
+  await fs.rm(tempDir, { recursive: true, force: true });
+});
+
+test('saveGraph computes the hash via graphHasher.hashGraph, never independently', async () => {
+  const graph = await db.saveGraph({ params: params(), points: points() });
+  assert.equal(graph.hash, hashGraph(params()));
+});
+
+test('saveGraph writes metadata.json, points.json, and notes.md on disk under the hash\'s own directory', async () => {
+  const graph = await db.saveGraph({ params: params(), points: points(), notes: 'hello' });
+  const dir = path.join(tempDir, graphDirName(graph.hash));
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(dir, 'metadata.json'), 'utf8')).hash, graph.hash);
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(dir, 'points.json'), 'utf8')), points());
+  assert.equal(await fs.readFile(path.join(dir, 'notes.md'), 'utf8'), 'hello');
+});
+
+test('saveGraph returns the {id, hash, metadata, points, notes} shape', async () => {
+  const graph = await db.saveGraph({ params: params(), points: points(), title: 'My Graph', notes: 'some notes' });
+  assert.ok(graph.id);
+  assert.ok(graph.hash);
+  assert.equal(graph.metadata.title, 'My Graph');
+  assert.deepEqual(graph.points, points());
+  assert.equal(graph.notes, 'some notes');
+});
+
+test('metadata.json includes every required field', async () => {
+  const graph = await db.saveGraph({
+    params: params(), points: points(), title: 't', description: 'd', author: 'a',
+    graphColorHex: '#ff0000', tags: ['x'], favorite: true, visibility: GRAPH_VISIBILITY.SHARED, computeTimeMs: 1234,
+  });
+  const { metadata } = graph;
+  for (const field of [
+    'id', 'hash', 'title', 'description', 'author', 'codeSequence', 'angleA', 'angleB', 'angleStep',
+    'baseLength', 'graphColorHex', 'createdAt', 'modifiedAt', 'algorithmVersion', 'pointCount',
+    'computeTimeMs', 'minX', 'maxX', 'minY', 'maxY', 'tags', 'favorite', 'visibility',
+  ]) {
+    assert.ok(field in metadata, `metadata is missing "${field}"`);
+  }
+  assert.equal(metadata.codeSequence, params().sequenceText);
+  assert.equal(metadata.angleStep, params().angleStepInput);
+  assert.equal(metadata.pointCount, 3);
+  assert.equal(metadata.computeTimeMs, 1234);
+  assert.equal(metadata.graphColorHex, '#ff0000');
+  assert.deepEqual(metadata.tags, ['x']);
+  assert.equal(metadata.favorite, true);
+  assert.equal(metadata.visibility, GRAPH_VISIBILITY.SHARED);
+});
+
+test('metadata min/max X/Y are derived from the points\' a/b values', async () => {
+  const graph = await db.saveGraph({ params: params(), points: points() });
+  assert.equal(graph.metadata.minX, 5);
+  assert.equal(graph.metadata.maxX, 30);
+  assert.equal(graph.metadata.minY, 20);
+  assert.equal(graph.metadata.maxY, 60);
+});
+
+test('metadata min/max X/Y are null for an empty points array', async () => {
+  const graph = await db.saveGraph({ params: params(), points: [] });
+  assert.equal(graph.metadata.minX, null);
+  assert.equal(graph.metadata.maxX, null);
+  assert.equal(graph.metadata.minY, null);
+  assert.equal(graph.metadata.maxY, null);
+});
+
+test('saving the same graph twice preserves id and createdAt, but updates modifiedAt and geometry', async () => {
+  const first = await db.saveGraph({ params: params(), points: [{ a: 1, b: 2 }] });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const second = await db.saveGraph({ params: params(), points: [{ a: 1, b: 2 }, { a: 3, b: 4 }] });
+
+  assert.equal(second.id, first.id);
+  assert.equal(second.metadata.createdAt, first.metadata.createdAt);
+  assert.notEqual(second.metadata.modifiedAt, first.metadata.modifiedAt);
+  assert.equal(second.metadata.pointCount, 2);
+});
+
+test('saving the same graph again without a notes argument preserves the existing notes.md', async () => {
+  await db.saveGraph({ params: params(), points: points(), notes: 'original notes' });
+  const resaved = await db.saveGraph({ params: params(), points: points() });
+  assert.equal(resaved.notes, 'original notes');
+});
+
+test('saving the same graph again with an explicit notes argument overwrites notes.md', async () => {
+  await db.saveGraph({ params: params(), points: points(), notes: 'original notes' });
+  const resaved = await db.saveGraph({ params: params(), points: points(), notes: 'updated notes' });
+  assert.equal(resaved.notes, 'updated notes');
+});
+
+test('a brand-new graph with no notes argument gets an empty notes.md', async () => {
+  const graph = await db.saveGraph({ params: params(), points: points() });
+  assert.equal(graph.notes, '');
+});
+
+test('loadGraph returns null for a hash that was never saved', async () => {
+  assert.equal(await db.loadGraph('never-saved-hash'), null);
+});
+
+test('loadGraph round-trips exactly what saveGraph wrote', async () => {
+  const saved = await db.saveGraph({ params: params(), points: points(), title: 'Round Trip', notes: 'notes here' });
+  const loaded = await db.loadGraph(saved.hash);
+  assert.deepEqual(loaded, saved);
+});
+
+test('graphExists is false before saving and true after', async () => {
+  const hash = hashGraph(params());
+  assert.equal(await db.graphExists(hash), false);
+  await db.saveGraph({ params: params(), points: points() });
+  assert.equal(await db.graphExists(hash), true);
+});
+
+test('deleteGraph removes the graph entirely; loadGraph/graphExists reflect that afterward', async () => {
+  const saved = await db.saveGraph({ params: params(), points: points() });
+  await db.deleteGraph(saved.hash);
+  assert.equal(await db.graphExists(saved.hash), false);
+  assert.equal(await db.loadGraph(saved.hash), null);
+});
+
+test('deleteGraph never throws for a hash that was never saved', async () => {
+  await assert.doesNotReject(() => db.deleteGraph('never-saved-hash'));
+});
+
+test('renameGraph changes only the title and modifiedAt, leaving every other field untouched', async () => {
+  const saved = await db.saveGraph({ params: params(), points: points(), title: 'Old Title' });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const renamed = await db.renameGraph(saved.hash, 'New Title');
+  assert.equal(renamed.title, 'New Title');
+  assert.notEqual(renamed.modifiedAt, saved.metadata.modifiedAt);
+  assert.equal(renamed.id, saved.id);
+  assert.equal(renamed.createdAt, saved.metadata.createdAt);
+  assert.equal(renamed.codeSequence, saved.metadata.codeSequence);
+
+  const reloaded = await db.loadGraph(saved.hash);
+  assert.equal(reloaded.metadata.title, 'New Title');
+});
+
+test('renameGraph throws for a hash that was never saved', async () => {
+  await assert.rejects(() => db.renameGraph('never-saved-hash', 'X'));
+});
+
+test('listGraphs returns metadata only (never a points field) for every saved graph', async () => {
+  await db.saveGraph({ params: params({ angleA: 15 }), points: points() });
+  await db.saveGraph({ params: params({ angleA: 16 }), points: points() });
+  const list = await db.listGraphs();
+  assert.equal(list.length, 2);
+  for (const entry of list) assert.ok(!('points' in entry));
+});
+
+test('listGraphs returns [] for a library that has never saved anything', async () => {
+  assert.deepEqual(await db.listGraphs(), []);
+});
+
+test('listGraphs defaults to newest-first (createdAt desc)', async () => {
+  const first = await db.saveGraph({ params: params({ angleA: 15 }), points: points() });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const second = await db.saveGraph({ params: params({ angleA: 16 }), points: points() });
+  const list = await db.listGraphs();
+  assert.equal(list[0].hash, second.hash);
+  assert.equal(list[1].hash, first.hash);
+});
+
+test('listGraphs supports sortBy/order overrides', async () => {
+  await db.saveGraph({ params: params({ angleA: 15 }), points: points(), title: 'Beta' });
+  await db.saveGraph({ params: params({ angleA: 16 }), points: points(), title: 'Alpha' });
+  const list = await db.listGraphs({ sortBy: 'title', order: 'asc' });
+  assert.deepEqual(list.map((g) => g.title), ['Alpha', 'Beta']);
+});
+
+test('searchGraphs with no query returns every graph', async () => {
+  await db.saveGraph({ params: params({ angleA: 15 }), points: points() });
+  await db.saveGraph({ params: params({ angleA: 16 }), points: points() });
+  assert.equal((await db.searchGraphs()).length, 2);
+});
+
+test('searchGraphs filters by a partial title match', async () => {
+  await db.saveGraph({ params: params({ angleA: 15 }), points: points(), title: 'Spiral Pattern' });
+  await db.saveGraph({ params: params({ angleA: 16 }), points: points(), title: 'Star Pattern' });
+  const results = await db.searchGraphs({ title: 'spiral' });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].title, 'Spiral Pattern');
+});
+
+test('searchGraphs filters by a partial codeSequence match', async () => {
+  await db.saveGraph({ params: params({ angleA: 15, sequenceText: '1 2 3' }), points: points() });
+  await db.saveGraph({ params: params({ angleA: 16, sequenceText: '9 9 9' }), points: points() });
+  const results = await db.searchGraphs({ codeSequence: '9 9' });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].codeSequence, '9 9 9');
+});
+
+test('searchGraphs filters by exact angleA/angleB/baseLength', async () => {
+  await db.saveGraph({ params: params({ angleA: 15 }), points: points() });
+  await db.saveGraph({ params: params({ angleA: 16 }), points: points() });
+  const results = await db.searchGraphs({ angleA: 16 });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].angleA, 16);
+});
+
+test('searchGraphs filters by favorite', async () => {
+  await db.saveGraph({ params: params({ angleA: 15 }), points: points(), favorite: true });
+  await db.saveGraph({ params: params({ angleA: 16 }), points: points(), favorite: false });
+  const results = await db.searchGraphs({ favorite: true });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].angleA, 15);
+});
+
+test('searchGraphs filters by visibility', async () => {
+  await db.saveGraph({ params: params({ angleA: 15 }), points: points(), visibility: GRAPH_VISIBILITY.PUBLIC });
+  await db.saveGraph({ params: params({ angleA: 16 }), points: points(), visibility: GRAPH_VISIBILITY.PRIVATE });
+  const results = await db.searchGraphs({ visibility: GRAPH_VISIBILITY.PUBLIC });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].angleA, 15);
+});
+
+test('searchGraphs filters by "any of these tags"', async () => {
+  await db.saveGraph({ params: params({ angleA: 15 }), points: points(), tags: ['homework', 'week1'] });
+  await db.saveGraph({ params: params({ angleA: 16 }), points: points(), tags: ['project'] });
+  const results = await db.searchGraphs({ tags: ['week1'] });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].angleA, 15);
+});
+
+test('searchGraphs ANDs multiple provided filters together', async () => {
+  await db.saveGraph({ params: params({ angleA: 15 }), points: points(), favorite: true, title: 'Alpha' });
+  await db.saveGraph({ params: params({ angleA: 16 }), points: points(), favorite: true, title: 'Beta' });
+  await db.saveGraph({ params: params({ angleA: 17 }), points: points(), favorite: false, title: 'Alpha' });
+  const results = await db.searchGraphs({ favorite: true, title: 'Alpha' });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].angleA, 15);
+});
+
+test('two graphs with different params never collide — each gets its own directory and hash', async () => {
+  const a = await db.saveGraph({ params: params({ angleA: 15 }), points: [{ a: 1, b: 2 }] });
+  const b = await db.saveGraph({ params: params({ angleA: 16 }), points: [{ a: 3, b: 4 }] });
+  assert.notEqual(a.hash, b.hash);
+  assert.deepEqual((await db.loadGraph(a.hash)).points, [{ a: 1, b: 2 }]);
+  assert.deepEqual((await db.loadGraph(b.hash)).points, [{ a: 3, b: 4 }]);
+});

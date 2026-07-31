@@ -23,6 +23,12 @@ dist-ssr
 agents/
 .repo-backups/
 
+# The file-based GraphDatabase's own data (server/graphDatabase/) — every
+# saved graph's metadata.json/points.json/notes.md. User-generated data,
+# not source; defaults to ./GraphLibrary unless GRAPH_LIBRARY_DIR points
+# elsewhere.
+/GraphLibrary/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
