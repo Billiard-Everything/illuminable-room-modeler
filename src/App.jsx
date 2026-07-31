@@ -1,7 +1,7 @@
 // React supplies state, refs, effects, and memoization for this client-only tool.
 import { useState, useRef, useEffect, useMemo } from 'react';
 // Lucide supplies recognizable control/status icons without custom SVG code.
-import { Maximize, Zap, Settings2, List, Code2, Compass, ChevronRight, ChevronLeft, Activity, CheckCircle2, XCircle, ShieldCheck, Eye, EyeOff, Search, AlertTriangle, Sun, Moon, ZoomIn, ZoomOut, Lock, Unlock, ScatterChart, Plus, Loader2, Trash2, Library } from 'lucide-react';
+import { Maximize, Zap, Settings2, List, Code2, Compass, ChevronRight, ChevronLeft, Activity, CheckCircle2, XCircle, ShieldCheck, Eye, EyeOff, Search, AlertTriangle, Sun, Moon, ZoomIn, ZoomOut, Lock, Unlock, ScatterChart, Plus, Loader2, Trash2, Library, Database } from 'lucide-react';
 // The angle-region plot pop-up lives in its own module (see src/anglePlot) so
 // it can be unit-tested without React and does not bloat this file further.
 import AnglePlotWindow from './anglePlot/AnglePlotWindow.jsx';
@@ -12,6 +12,11 @@ import GraphSetupWindow from './sequences/GraphSetupWindow.jsx';
 // this file is what actually inserts it into the existing sequences/
 // AnglePlotWindow pipeline (see handleLoadGraphFromLibrary below).
 import GraphLibraryPanel from './graphLibrary/GraphLibraryPanel.jsx';
+// The Graph Database browser (search/sort/rename/delete/duplicate/favorite/
+// tags/notes/load for the local, file-based GraphDatabase) follows the
+// identical "hands back params/geometry via onLoadGraph" contract as
+// GraphLibraryPanel above — see handleLoadGraphFromDatabase below.
+import GraphDatabasePanel from './graphLibrary/GraphDatabasePanel.jsx';
 import { primeExactGraphCache } from './anglePlot/exactGraphCaching.js';
 // The multi-sequence row list (Desmos-style "+ Add Sequence") is a plain
 // data model shared between the sidebar row list and the graph pop-up, so
@@ -1719,6 +1724,13 @@ export default function App() {
   // reloads (matching isGraphSetupOpen's own choice) — it's an optional
   // browsing tool, not part of "the workspace" being restored.
   const [isGraphLibraryOpen, setIsGraphLibraryOpen] = useState(false);
+  // Graph Database: the fuller browser for the local, file-based
+  // GraphDatabase — same "not part of the restored workspace" treatment as
+  // isGraphLibraryOpen, and a completely separate panel/store from it (see
+  // GraphDatabasePanel.jsx's own module comment on why rename/delete/
+  // favorite/tags/notes only make sense for this single-user local library,
+  // not the multi-user shared one).
+  const [isGraphDatabaseOpen, setIsGraphDatabaseOpen] = useState(false);
   // Bumped on every "Plot Valid Angle Region" click so an already-open window
   // regenerates and comes to the front instead of a duplicate window opening.
   const [anglePlotRequestId, setAnglePlotRequestId] = useState(0);
@@ -2481,6 +2493,51 @@ export default function App() {
     setIsGraphLibraryOpen(false);
   };
 
+  // The Graph Database browser's "Load Graph"/"Duplicate"/double-click-to-
+  // open actions (see GraphDatabasePanel.jsx and useLocalGraphDatabase.js)
+  // all funnel through this same one handler — mirrors
+  // handleLoadGraphFromLibrary above exactly, just reading the local
+  // GraphDatabase's flat metadata shape (graph.codeSequence/angleStep,
+  // not graph.params.sequenceText/angleStepInput) instead of the
+  // PostgreSQL-backed one's. Deliberately does NOT carry the loaded
+  // graph's own title/color/tags/favorite onto the new row — like
+  // handleLoadGraphFromLibrary, a loaded/duplicated row starts as a
+  // normal new row (its own next-in-sequence color, blank title/tags),
+  // free to diverge from the library entry it came from.
+  //
+  // `closePanel` (useLocalGraphDatabase.js's own loadGraphIntoSession) is
+  // false for a quick "Duplicate" click or an instant-open double-click —
+  // both are meant to be repeatable while still browsing — and true for
+  // the deliberate "Load Graph" button, which signals "I'm done browsing."
+  const handleLoadGraphFromDatabase = (graph, geometry, { closePanel = true } = {}) => {
+    const graphBaseLength = Number(graph.baseLength);
+    if (Number.isFinite(graphBaseLength) && graphBaseLength !== baseTriangleLength) {
+      setBaseTriangleLength(graphBaseLength);
+    }
+
+    const number = nextSequenceNumberRef.current++;
+    const newRow = createSequenceRow({
+      number,
+      sequenceText: graph.codeSequence,
+      angleStepInput: graph.angleStep,
+      angleA: graph.angleA,
+      angleB: graph.angleB,
+    });
+
+    // Pre-populate GraphCache under the database's own authoritative hash
+    // *before* this row's first plot job runs, so that job's own STEP 2
+    // (AnglePlotWindow.jsx) is an instant local hit — never a second
+    // fetch, never a recompute ("Load graph should... Draw immediately.
+    // No recomputation.").
+    primeExactGraphCache(graph.hash, newRow.angleStepInput, geometry);
+
+    setSequences(rows => relabelSequenceRows([...rows, newRow]));
+    setActiveSequenceId(newRow.id);
+    setIsAnglePlotOpen(true);
+    setForceGenerateRequest({ id: newRow.id, token: ++forceGenerateTokenRef.current });
+    if (closePanel) setIsGraphDatabaseOpen(false);
+  };
+
   // --- SEQUENCE ROW LIST HANDLERS ---
   // "+ Add Sequence": appends a new, empty, visible row and makes it active
   // (matches "click a row to edit it" — a freshly added row is the one the
@@ -2987,6 +3044,14 @@ export default function App() {
                   className="flex flex-1 items-center justify-center gap-1.5 rounded-md border border-cyan-300/35 bg-cyan-500/15 px-2.5 py-1.5 text-[11px] font-bold text-cyan-100 transition-colors hover:bg-cyan-500/25"
                 >
                   <Library className="w-3.5 h-3.5" /> Graph Library
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsGraphDatabaseOpen(true)}
+                  title="Search, sort, rename, tag, favorite, annotate, and instantly reload every graph permanently cached on this machine"
+                  className="flex flex-1 items-center justify-center gap-1.5 rounded-md border border-emerald-300/35 bg-emerald-500/15 px-2.5 py-1.5 text-[11px] font-bold text-emerald-100 transition-colors hover:bg-emerald-500/25"
+                >
+                  <Database className="w-3.5 h-3.5" /> Graph Database
                 </button>
               </div>
 
@@ -3940,6 +4005,22 @@ export default function App() {
           isOpen={isGraphLibraryOpen}
           onClose={() => setIsGraphLibraryOpen(false)}
           onLoadGraph={handleLoadGraphFromLibrary}
+        />
+      )}
+
+      {/* Graph Database: the fuller browser for the local, file-based
+          GraphDatabase — search/sort/rename/delete/duplicate/favorite/
+          tags/notes, plus load-instantly-with-no-recompute. A completely
+          separate panel and store from the Graph Library above (see
+          GraphDatabasePanel.jsx's own module comment). Owns no plotting
+          state itself — handleLoadGraphFromDatabase is what actually
+          creates a new row and feeds it into the existing AnglePlotWindow
+          pipeline. */}
+      {isGraphDatabaseOpen && (
+        <GraphDatabasePanel
+          isOpen={isGraphDatabaseOpen}
+          onClose={() => setIsGraphDatabaseOpen(false)}
+          onLoadGraph={handleLoadGraphFromDatabase}
         />
       )}
 

@@ -16,6 +16,12 @@
 import { apiBaseUrl, devLog, devWarn, fetchWithTimeout } from './apiClientUtils.js';
 
 const DEFAULT_TIMEOUT_MS = 600;
+// The Graph Database browser's own actions (browse/search/rename/favorite/
+// tags/notes/delete) are deliberate, user-initiated clicks — not something
+// gating an in-progress render the way fetchLocalExactGraph/
+// saveLocalExactGraph's 600ms is (see remoteGraphRepository.js's own
+// LIBRARY_TIMEOUT_MS for the identical reasoning on the PostgreSQL side).
+const BROWSER_TIMEOUT_MS = 5000;
 
 /**
  * Looks up the exact geometry for `hash` in the local file-based GraphDatabase.
@@ -76,5 +82,153 @@ export const saveLocalExactGraph = async (params, algorithmVersion, points, dura
     devLog('Renderer: Saved exact graph to the local file-based GraphDatabase');
   } catch (err) {
     devWarn('Renderer: local GraphDatabase save unavailable, exact graph stays uncached locally for now', err);
+  }
+};
+
+/**
+ * Fetches a graph's full stored record — points AND notes together (unlike
+ * fetchLocalExactGraph, which only ever returns {points, durationMs} for
+ * the render pipeline's own cache-hit path and was left untouched here to
+ * avoid coupling that established contract to this browser-only need).
+ * Used by the Graph Database browser the moment a card is selected: one
+ * request gets both the notes text to show/edit AND the geometry, so a
+ * subsequent "Load Graph" click never needs a second round trip.
+ *
+ * @param {string} hash
+ * @param {{timeoutMs?: number}} [options]
+ * @returns {Promise<{points: Array, durationMs: number|null, notes: string}|null>}
+ *   null for "not found" *and* for any failure/timeout, same as fetchLocalExactGraph.
+ */
+export const fetchLocalGraphDetails = async (hash, { timeoutMs = BROWSER_TIMEOUT_MS } = {}) => {
+  try {
+    const res = await fetchWithTimeout(`${apiBaseUrl()}/api/local-graphs/${encodeURIComponent(hash)}`, {}, timeoutMs);
+    if (!res.ok) {
+      devWarn(`Renderer: Graph Database detail lookup returned ${res.status}`);
+      return null;
+    }
+    const body = await res.json();
+    if (!body.exists) return null;
+    return { points: body.graph.points, durationMs: body.graph.metadata?.computeTimeMs ?? null, notes: body.graph.notes ?? '' };
+  } catch (err) {
+    devWarn('Renderer: Graph Database detail lookup unavailable', err);
+    return null;
+  }
+};
+
+/**
+ * Browses or searches the local GraphDatabase's metadata (never geometry —
+ * mirrors remoteGraphRepository.js's fetchGraphLibraryPage and
+ * server/api/app.js's own route-table comment on why the browse/search
+ * routes are metadata-only). Used by the Graph Database browser
+ * (src/graphLibrary/**) — nothing in the rendering pipeline calls this.
+ *
+ * Routes to GET /api/local-graphs/search instead of GET /api/local-graphs
+ * the moment any of `search`'s fields are present, mirroring
+ * fetchGraphLibraryPage's own identical convention.
+ *
+ * @param {object} [params]
+ * @param {string} [params.sort] - one of localGraphDatabaseConstants.js's LOCAL_GRAPH_SORT values.
+ * @param {number} [params.limit]
+ * @param {number} [params.offset]
+ * @param {{title?: string, code?: string, angleA?: number, angleB?: number, baseLength?: number, favorite?: boolean, visibility?: string, tags?: string[]}} [params.search]
+ * @param {{timeoutMs?: number}} [options]
+ * @returns {Promise<{graphs: Array, error: boolean}>} `error: true` on any
+ *   failure (never thrown) — kept distinct from an empty `graphs` array so
+ *   the panel can tell "the library has nothing matching yet" apart from
+ *   "couldn't reach it right now."
+ */
+export const fetchLocalGraphLibraryPage = async ({ sort, limit, offset, search = {} } = {}, { timeoutMs = BROWSER_TIMEOUT_MS } = {}) => {
+  const queryParams = new URLSearchParams();
+  if (sort) queryParams.set('sort', sort);
+  if (limit !== undefined) queryParams.set('limit', String(limit));
+  if (offset !== undefined) queryParams.set('offset', String(offset));
+
+  const hasSearch = search.title || search.code
+    || (search.angleA !== undefined && search.angleA !== '')
+    || (search.angleB !== undefined && search.angleB !== '')
+    || (search.baseLength !== undefined && search.baseLength !== '')
+    || search.favorite || search.visibility || (search.tags && search.tags.length > 0);
+  if (hasSearch) {
+    if (search.title) queryParams.set('title', search.title);
+    if (search.code) queryParams.set('code', search.code);
+    if (search.angleA !== undefined && search.angleA !== '') queryParams.set('angleA', String(search.angleA));
+    if (search.angleB !== undefined && search.angleB !== '') queryParams.set('angleB', String(search.angleB));
+    if (search.baseLength !== undefined && search.baseLength !== '') queryParams.set('baseLength', String(search.baseLength));
+    if (search.favorite) queryParams.set('favorite', 'true');
+    if (search.visibility) queryParams.set('visibility', search.visibility);
+    if (search.tags && search.tags.length > 0) queryParams.set('tags', search.tags.join(','));
+  }
+
+  const path = hasSearch ? '/api/local-graphs/search' : '/api/local-graphs';
+  try {
+    const res = await fetchWithTimeout(`${apiBaseUrl()}${path}?${queryParams}`, {}, timeoutMs);
+    if (!res.ok) {
+      devWarn(`Renderer: Graph Database browse/search returned ${res.status}`);
+      return { graphs: [], error: true };
+    }
+    const body = await res.json();
+    return { graphs: body.graphs ?? [], error: false };
+  } catch (err) {
+    devWarn('Renderer: Graph Database unavailable', err);
+    return { graphs: [], error: true };
+  }
+};
+
+/**
+ * Partial-updates a graph's metadata (rename, favorite, tags, notes,
+ * visibility, color) — an explicit, user-initiated librarian action (the
+ * Graph Database browser's rename/favorite-toggle/tag-edit/notes-edit
+ * controls), so unlike fetchLocalExactGraph/saveLocalExactGraph this
+ * reports success/failure back to the caller instead of silently
+ * swallowing it — the user clicked something and needs to know whether it
+ * actually took effect.
+ *
+ * @param {string} hash
+ * @param {{title?: string, notes?: string, tags?: string[], favorite?: boolean, visibility?: string, graphColorHex?: string}} updates
+ * @param {{timeoutMs?: number}} [options]
+ * @returns {Promise<{ok: true, metadata: object}|{ok: false}>}
+ */
+export const updateLocalGraphMetadata = async (hash, updates, { timeoutMs = BROWSER_TIMEOUT_MS } = {}) => {
+  try {
+    const res = await fetchWithTimeout(`${apiBaseUrl()}/api/local-graphs/${encodeURIComponent(hash)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    }, timeoutMs);
+    if (!res.ok) {
+      devWarn(`Renderer: Graph Database metadata update returned ${res.status}`);
+      return { ok: false };
+    }
+    const body = await res.json();
+    devLog('Renderer: Updated graph metadata in the local Graph Database');
+    return { ok: true, metadata: body.metadata };
+  } catch (err) {
+    devWarn('Renderer: Graph Database metadata update unavailable', err);
+    return { ok: false };
+  }
+};
+
+/**
+ * Deletes a graph from the local GraphDatabase entirely (metadata, points,
+ * and notes together) — the Graph Database browser's Delete action.
+ * Reports success/failure back to the caller for the same reason
+ * updateLocalGraphMetadata does.
+ *
+ * @param {string} hash
+ * @param {{timeoutMs?: number}} [options]
+ * @returns {Promise<boolean>} whether the delete request completed successfully.
+ */
+export const deleteLocalGraph = async (hash, { timeoutMs = BROWSER_TIMEOUT_MS } = {}) => {
+  try {
+    const res = await fetchWithTimeout(`${apiBaseUrl()}/api/local-graphs/${encodeURIComponent(hash)}`, { method: 'DELETE' }, timeoutMs);
+    if (!res.ok) {
+      devWarn(`Renderer: Graph Database delete returned ${res.status}`);
+      return false;
+    }
+    devLog('Renderer: Deleted graph from the local Graph Database');
+    return true;
+  } catch (err) {
+    devWarn('Renderer: Graph Database delete unavailable', err);
+    return false;
   }
 };
