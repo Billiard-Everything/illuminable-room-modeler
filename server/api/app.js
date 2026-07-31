@@ -22,10 +22,19 @@
 //   GET  /api/graphs/recent      listRecentGraphs (metadata only)
 //   GET  /api/graphs/:hash       getGraphWithGeometry (download — the one route that returns geometry)
 //   POST /api/graphs             uploadExactGraphIfMissing
+//   GET  /api/local-graphs/:hash graphDatabase.loadGraph  (file-based local GraphDatabase — permanent cache)
+//   POST /api/local-graphs       graphDatabase.saveGraph
 // The three metadata-only routes are matched before the generic
 // `/api/graphs/:hash` fallback specifically so a hash can never collide
 // with a literal path segment like "search" or "recent" (a real hash is a
 // long, structured string that URL-encodes distinctly from either).
+//
+// /api/local-graphs is a distinct prefix, not a variant of /api/graphs, so
+// it can never collide with the PostgreSQL-backed routes above — it talks
+// to a completely separate storage system (the file-based GraphDatabase,
+// server/graphDatabase/graphDatabase.js) used as this app's permanent
+// local render cache (see AnglePlotWindow.jsx's STEP 2b/STEP 4), which is
+// additive to — never a replacement for — the shared PostgreSQL library.
 //
 // Failure handling
 // -----------------
@@ -50,6 +59,7 @@
 
 import { getGraphRepository } from '../repositories/graphRepository.js';
 import { parseListOptions, parseSearchQuery } from './queryParsing.js';
+import { graphDatabase as defaultGraphDatabase } from '../graphDatabase/graphDatabase.js';
 
 // Read per-request (not cached at module load) so a test can flip
 // process.env.CORS_ORIGIN between cases in the same process — in
@@ -105,7 +115,7 @@ const sendJson = (res, status, body) => {
  * round-trips against a fake repository with no real database at all (see
  * api-app.test.mjs).
  */
-export const createApp = (repository) => async (req, res) => {
+export const createApp = (repository, { graphDatabase: graphDb = defaultGraphDatabase } = {}) => async (req, res) => {
   withCors(req, res);
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
@@ -171,6 +181,27 @@ export const createApp = (repository) => async (req, res) => {
       }
       const result = await repository.uploadExactGraphIfMissing(body);
       return sendJson(res, 200, result);
+    }
+
+    // Local file-based GraphDatabase — the permanent render cache. Same
+    // shape as the PostgreSQL download route ({exists, graph} vs.
+    // {exists: false}), just a different backing store and a `graph`
+    // field name (not `geometry`) matching graphDatabase.js's own
+    // {id, hash, metadata, points, notes} object.
+    if (req.method === 'GET' && url.pathname.startsWith('/api/local-graphs/')) {
+      const hash = decodeURIComponent(url.pathname.slice('/api/local-graphs/'.length));
+      if (!hash) return sendJson(res, 400, { error: 'missing hash' });
+      const graph = await graphDb.loadGraph(hash);
+      return sendJson(res, 200, graph ? { exists: true, graph } : { exists: false });
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/local-graphs') {
+      const body = await readJsonBody(req);
+      if (!body.params || !Array.isArray(body.points)) {
+        return sendJson(res, 400, { error: 'params and points are required' });
+      }
+      const graph = await graphDb.saveGraph(body);
+      return sendJson(res, 200, { saved: true, graph });
     }
 
     sendJson(res, 404, { error: 'not found' });
