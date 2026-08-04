@@ -36,6 +36,7 @@
 //   GraphLibrary/graph_<hash>/notes.md
 
 import path from 'node:path';
+import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { hashGraph, GRAPH_HASH_ALGORITHM_VERSION } from '../../src/anglePlot/graphHasher.js';
 import {
@@ -50,14 +51,53 @@ const NOTES_FILE = 'notes.md';
 /** Allowed values for a graph's `visibility` metadata field. Plain data — see this module's own header comment on why this isn't an enforced permission system. */
 export const GRAPH_VISIBILITY = { PRIVATE: 'private', SHARED: 'shared', PUBLIC: 'public' };
 
+/**
+ * The `author`/"owner" a brand-new graph gets when nothing explicit was
+ * passed — this app has no login system (see this module's own non-goals),
+ * so there's no real user identity to record. An explicit GRAPH_DB_USERNAME
+ * env var wins if set; otherwise this machine's own OS account name is a
+ * reasonable, zero-configuration stand-in for "whoever computed this graph
+ * on this machine" — good enough for the Graph Database browser's own
+ * "owner" card field without inventing an accounts system for it. Falls
+ * back to null (rather than throwing) in a sandboxed/containerized
+ * environment where os.userInfo() itself can throw.
+ */
+const resolveDefaultAuthor = () => {
+  if (process.env.GRAPH_DB_USERNAME) return process.env.GRAPH_DB_USERNAME;
+  try {
+    return os.userInfo().username || null;
+  } catch {
+    return null;
+  }
+};
+
 const range = (values) => {
   const finite = values.filter(Number.isFinite);
   if (finite.length === 0) return { min: null, max: null };
   return { min: Math.min(...finite), max: Math.max(...finite) };
 };
 
-/** Builds the metadata.json shape from a save request + points, preserving id/createdAt from `existing` if this hash was already stored. */
-const buildMetadata = ({ hash, params, points, title, description, author, graphColorHex, tags, favorite, visibility, computeTimeMs }, existing) => {
+const NOTES_PREVIEW_LENGTH = 80;
+
+/** A short, single-line excerpt of `notes` for card display without reading notes.md during a listing — see buildMetadata's own `notesPreview` field. */
+const buildNotesPreview = (notes) => {
+  const collapsed = notes.replace(/\s+/g, ' ').trim();
+  return collapsed.length <= NOTES_PREVIEW_LENGTH ? collapsed : `${collapsed.slice(0, NOTES_PREVIEW_LENGTH - 1)}…`;
+};
+
+/**
+ * Builds the metadata.json shape from a save request + points, preserving
+ * id/createdAt from `existing` if this hash was already stored.
+ *
+ * `notesPreview` is a short excerpt of notes.md's own content, denormalized
+ * into metadata.json purely so the Graph Database browser's cards can show
+ * a hint of a graph's notes without reading notes.md for every graph while
+ * just listing/searching (which stays a pure metadata.json read — see
+ * listGraphs' own comment) — the FULL notes text is still only ever read
+ * from notes.md itself (loadGraph, or query.text's own search — see
+ * searchGraphs), never reconstructed from this preview.
+ */
+const buildMetadata = ({ hash, params, points, title, description, author, graphColorHex, tags, favorite, visibility, computeTimeMs, notes }, existing) => {
   const now = new Date().toISOString();
   const xs = range(points.map((p) => p.a));
   const ys = range(points.map((p) => p.b));
@@ -66,7 +106,7 @@ const buildMetadata = ({ hash, params, points, title, description, author, graph
     hash,
     title: title ?? existing?.title ?? '',
     description: description ?? existing?.description ?? '',
-    author: author !== undefined ? author : (existing?.author ?? null),
+    author: author !== undefined ? author : (existing?.author ?? resolveDefaultAuthor()),
     codeSequence: params.sequenceText,
     angleA: params.angleA,
     angleB: params.angleB,
@@ -82,6 +122,7 @@ const buildMetadata = ({ hash, params, points, title, description, author, graph
     tags: tags ?? existing?.tags ?? [],
     favorite: favorite ?? existing?.favorite ?? false,
     visibility: visibility ?? existing?.visibility ?? GRAPH_VISIBILITY.PRIVATE,
+    notesPreview: notes !== undefined ? buildNotesPreview(notes) : (existing?.notesPreview ?? ''),
   };
 };
 
@@ -118,7 +159,7 @@ export const createGraphDatabase = (baseDir) => {
       const hash = hashGraph(params);
       const dir = dirFor(hash);
       const existing = await readJsonIfExists(path.join(dir, METADATA_FILE));
-      const metadata = buildMetadata({ hash, params, points, title, description, author, graphColorHex, tags, favorite, visibility, computeTimeMs }, existing);
+      const metadata = buildMetadata({ hash, params, points, title, description, author, graphColorHex, tags, favorite, visibility, computeTimeMs, notes }, existing);
 
       await ensureDir(dir);
       await atomicWriteJson(path.join(dir, METADATA_FILE), metadata);
@@ -202,6 +243,7 @@ export const createGraphDatabase = (baseDir) => {
         tags: tags !== undefined ? tags : metadata.tags,
         favorite: favorite !== undefined ? favorite : metadata.favorite,
         visibility: visibility !== undefined ? visibility : metadata.visibility,
+        notesPreview: notes !== undefined ? buildNotesPreview(notes) : metadata.notesPreview,
         modifiedAt: new Date().toISOString(),
       };
       await atomicWriteJson(metadataPath, updated);
@@ -238,25 +280,54 @@ export const createGraphDatabase = (baseDir) => {
      * Filters listGraphs' own results — partial (substring) match on
      * title/description/codeSequence, exact match on angleA/angleB/
      * baseLength/algorithmVersion/favorite/visibility, "any of these tags"
-     * for tags. Every filter is optional and ANDed together with the
-     * others actually provided.
+     * for tags, plus `query.text`: a single free-text term that matches if
+     * it's a substring of ANY of title/codeSequence/author (owner)/hash/any
+     * tag/notes — the Graph Database browser's one search box (see this
+     * task's own "searching should work across title, code, tags, notes,
+     * owner, graph hash" requirement). Every filter is optional and ANDed
+     * together with the others actually provided; `text`'s own six fields
+     * are ORed against each other, then that OR result is ANDed with
+     * everything else, matching how a search box plus structured filters
+     * normally compose.
+     *
+     * notes.md is the one field not already in `metadata` (see this
+     * module's own file-layout comment — it's a separate file from
+     * metadata.json), so it's only ever read from disk when `query.text`
+     * is actually provided — every other filter above stays a pure
+     * in-memory check over what listGraphs already fetched, so a search
+     * that never uses the text box costs nothing extra.
      */
     async searchGraphs(query = {}, options = {}) {
       const all = await this.listGraphs(options);
       const contains = (haystack, needle) => (haystack ?? '').toLowerCase().includes(String(needle).toLowerCase());
-      return all.filter((metadata) => {
-        if (query.title && !contains(metadata.title, query.title)) return false;
-        if (query.description && !contains(metadata.description, query.description)) return false;
-        if (query.codeSequence && !contains(metadata.codeSequence, query.codeSequence)) return false;
-        if (query.angleA !== undefined && metadata.angleA !== Number(query.angleA)) return false;
-        if (query.angleB !== undefined && metadata.angleB !== Number(query.angleB)) return false;
-        if (query.baseLength !== undefined && metadata.baseLength !== Number(query.baseLength)) return false;
-        if (query.algorithmVersion !== undefined && metadata.algorithmVersion !== Number(query.algorithmVersion)) return false;
-        if (query.favorite !== undefined && metadata.favorite !== Boolean(query.favorite)) return false;
-        if (query.visibility && metadata.visibility !== query.visibility) return false;
-        if (query.tags && query.tags.length > 0 && !query.tags.some((tag) => (metadata.tags ?? []).includes(tag))) return false;
-        return true;
-      });
+      const matchesText = async (metadata, text) => (
+        contains(metadata.title, text)
+        || contains(metadata.codeSequence, text)
+        || contains(metadata.author, text)
+        || contains(metadata.hash, text)
+        || (metadata.tags ?? []).some((tag) => contains(tag, text))
+        || contains(await readTextIfExists(path.join(dirFor(metadata.hash), NOTES_FILE), ''), text)
+      );
+
+      const results = [];
+      for (const metadata of all) {
+        if (query.title && !contains(metadata.title, query.title)) continue;
+        if (query.description && !contains(metadata.description, query.description)) continue;
+        if (query.codeSequence && !contains(metadata.codeSequence, query.codeSequence)) continue;
+        if (query.angleA !== undefined && metadata.angleA !== Number(query.angleA)) continue;
+        if (query.angleB !== undefined && metadata.angleB !== Number(query.angleB)) continue;
+        if (query.baseLength !== undefined && metadata.baseLength !== Number(query.baseLength)) continue;
+        if (query.algorithmVersion !== undefined && metadata.algorithmVersion !== Number(query.algorithmVersion)) continue;
+        if (query.favorite !== undefined && metadata.favorite !== Boolean(query.favorite)) continue;
+        if (query.visibility && metadata.visibility !== query.visibility) continue;
+        if (query.tags && query.tags.length > 0 && !query.tags.some((tag) => (metadata.tags ?? []).includes(tag))) continue;
+        // notes.md is only read (inside matchesText) for a candidate that
+        // already passed every cheaper filter above, and only when
+        // query.text is actually provided.
+        if (query.text && !(await matchesText(metadata, query.text))) continue;
+        results.push(metadata);
+      }
+      return results;
     },
   };
 };

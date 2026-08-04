@@ -65,7 +65,11 @@ export const useLocalGraphDatabase = ({ isOpen, onLoadGraph }) => {
   const buildQuery = useCallback(() => {
     const search = {};
     const trimmed = searchText.trim();
-    if (trimmed) search.title = trimmed;
+    // `text` searches across title/code/tags/notes/owner/hash all at once
+    // (see graphDatabase.js's own searchGraphs comment) — the one search
+    // box's whole point, as opposed to the separate Angle A/B/Base Length
+    // number filters below, which stay exact-field.
+    if (trimmed) search.text = trimmed;
     if (angleAFilter !== '') search.angleA = angleAFilter;
     if (angleBFilter !== '') search.angleB = angleBFilter;
     if (baseLengthFilter !== '') search.baseLength = baseLengthFilter;

@@ -10,7 +10,8 @@ import { truncateSequenceText } from '../sequences/sequenceGraphConfig.js';
 // of cluttering every card in the grid (see GraphDatabasePanel.jsx).
 export default function GraphDatabaseCard({ graph, isSelected, onSelect, onOpen, onToggleFavorite, onDuplicate, onDelete }) {
   const {
-    title, codeSequence, angleA, angleB, angleStep, graphColorHex, pointCount, createdAt, modifiedAt, tags, favorite,
+    title, codeSequence, angleA, angleB, angleStep, baseLength, graphColorHex, pointCount, createdAt, modifiedAt,
+    tags, favorite, author, visibility, notesPreview,
   } = graph;
   const displayTitle = title || truncateSequenceText(codeSequence, 28);
 
@@ -74,12 +75,15 @@ export default function GraphDatabaseCard({ graph, isSelected, onSelect, onOpen,
         <span>A {angleA}</span>
         <span>B {angleB}</span>
         <span>Step {angleStep}</span>
+        <span>Len {baseLength}</span>
         <span>{pointCount.toLocaleString()} pts</span>
       </div>
 
       <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[9.5px] text-slate-600 mt-0.5">
         <span title="Created">Created {new Date(createdAt).toLocaleDateString()}</span>
         {modifiedAt !== createdAt && <span title="Last modified">Modified {new Date(modifiedAt).toLocaleDateString()}</span>}
+        {author && <span title="Owner">by {author}</span>}
+        <span className="capitalize" title="Visibility">{visibility}</span>
       </div>
 
       {tags?.length > 0 && (
@@ -87,6 +91,12 @@ export default function GraphDatabaseCard({ graph, isSelected, onSelect, onOpen,
           {tags.map((tag) => (
             <span key={tag} className="rounded bg-white/5 px-1.5 py-0.5 text-[9.5px] text-slate-400">{tag}</span>
           ))}
+        </div>
+      )}
+
+      {notesPreview && (
+        <div className="mt-1 text-[9.5px] text-slate-500 italic truncate" title={notesPreview}>
+          {notesPreview}
         </div>
       )}
     </div>

@@ -59,10 +59,15 @@ export const parseLocalListOptions = (searchParams) => {
  * Parses GET /api/local-graphs/search's own search-field query params into
  * graphDatabase.js's searchGraphs' query shape. `code` (the public,
  * user-facing query param name, matching queryParsing.js's own convention)
- * maps to `codeSequence` (the local schema's own field name for it).
+ * maps to `codeSequence` (the local schema's own field name for it). `q`
+ * is the Graph Database browser's one free-text search box — maps to
+ * searchGraphs' own `text` field, which matches across title/code/tags/
+ * notes/owner/hash all at once (see graphDatabase.js's own comment on why
+ * that's a distinct concept from the exact-field filters below it).
  */
 export const parseLocalSearchQuery = (searchParams) => {
   const query = {};
+  if (searchParams.has('q')) query.text = searchParams.get('q');
   if (searchParams.has('title')) query.title = searchParams.get('title');
   if (searchParams.has('code')) query.codeSequence = searchParams.get('code');
   if (searchParams.has('angleA')) query.angleA = Number(searchParams.get('angleA'));

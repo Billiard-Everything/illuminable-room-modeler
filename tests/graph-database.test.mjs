@@ -48,12 +48,13 @@ test('metadata.json includes every required field', async () => {
   const graph = await db.saveGraph({
     params: params(), points: points(), title: 't', description: 'd', author: 'a',
     graphColorHex: '#ff0000', tags: ['x'], favorite: true, visibility: GRAPH_VISIBILITY.SHARED, computeTimeMs: 1234,
+    notes: 'some notes',
   });
   const { metadata } = graph;
   for (const field of [
     'id', 'hash', 'title', 'description', 'author', 'codeSequence', 'angleA', 'angleB', 'angleStep',
     'baseLength', 'graphColorHex', 'createdAt', 'modifiedAt', 'algorithmVersion', 'pointCount',
-    'computeTimeMs', 'minX', 'maxX', 'minY', 'maxY', 'tags', 'favorite', 'visibility',
+    'computeTimeMs', 'minX', 'maxX', 'minY', 'maxY', 'tags', 'favorite', 'visibility', 'notesPreview',
   ]) {
     assert.ok(field in metadata, `metadata is missing "${field}"`);
   }
@@ -109,6 +110,102 @@ test('saving the same graph again with an explicit notes argument overwrites not
 test('a brand-new graph with no notes argument gets an empty notes.md', async () => {
   const graph = await db.saveGraph({ params: params(), points: points() });
   assert.equal(graph.notes, '');
+});
+
+// --- metadata.notesPreview (a short, denormalized excerpt of notes.md) ----
+// Lets the Graph Database browser's cards show a hint of a graph's notes
+// without reading notes.md for every card during a plain listing.
+
+test('saveGraph with short notes stores the whole thing, collapsed to one line, as notesPreview', async () => {
+  const graph = await db.saveGraph({ params: params(), points: points(), notes: 'line one\nline two' });
+  assert.equal(graph.metadata.notesPreview, 'line one line two');
+});
+
+test('saveGraph with long notes truncates notesPreview with an ellipsis', async () => {
+  const longNotes = 'x'.repeat(200);
+  const graph = await db.saveGraph({ params: params(), points: points(), notes: longNotes });
+  assert.ok(graph.metadata.notesPreview.length <= 80);
+  assert.ok(graph.metadata.notesPreview.endsWith('…'));
+});
+
+test('saveGraph with no notes argument leaves notesPreview empty', async () => {
+  const graph = await db.saveGraph({ params: params(), points: points() });
+  assert.equal(graph.metadata.notesPreview, '');
+});
+
+test('saving again without a notes argument preserves the existing notesPreview', async () => {
+  const first = await db.saveGraph({ params: params(), points: points(), notes: 'original notes' });
+  const second = await db.saveGraph({ params: params(), points: [{ a: 9, b: 9 }] });
+  assert.equal(second.metadata.notesPreview, first.metadata.notesPreview);
+});
+
+test('updateGraphMetadata with a notes update refreshes notesPreview to match', async () => {
+  const saved = await db.saveGraph({ params: params(), points: points(), notes: 'old notes' });
+  const updated = await db.updateGraphMetadata(saved.hash, { notes: 'brand new notes' });
+  assert.equal(updated.notesPreview, 'brand new notes');
+});
+
+test('updateGraphMetadata without a notes update leaves notesPreview untouched', async () => {
+  const saved = await db.saveGraph({ params: params(), points: points(), notes: 'original notes' });
+  const updated = await db.updateGraphMetadata(saved.hash, { favorite: true });
+  assert.equal(updated.notesPreview, saved.metadata.notesPreview);
+});
+
+test('listGraphs returns notesPreview without ever reading notes.md itself', async () => {
+  const saved = await db.saveGraph({ params: params(), points: points(), notes: 'preview me' });
+  const dir = path.join(tempDir, graphDirName(saved.hash));
+  await fs.rm(path.join(dir, 'notes.md'));
+  const list = await db.listGraphs();
+  assert.equal(list[0].notesPreview, 'preview me');
+});
+
+// --- author ("owner") default resolution ------------------------------
+
+test('saveGraph defaults author to GRAPH_DB_USERNAME when no explicit author is given', async () => {
+  const original = process.env.GRAPH_DB_USERNAME;
+  process.env.GRAPH_DB_USERNAME = 'alice';
+  try {
+    const graph = await db.saveGraph({ params: params(), points: points() });
+    assert.equal(graph.metadata.author, 'alice');
+  } finally {
+    if (original === undefined) delete process.env.GRAPH_DB_USERNAME; else process.env.GRAPH_DB_USERNAME = original;
+  }
+});
+
+test('saveGraph with an explicit author overrides the GRAPH_DB_USERNAME default', async () => {
+  const original = process.env.GRAPH_DB_USERNAME;
+  process.env.GRAPH_DB_USERNAME = 'alice';
+  try {
+    const graph = await db.saveGraph({ params: params(), points: points(), author: 'bob' });
+    assert.equal(graph.metadata.author, 'bob');
+  } finally {
+    if (original === undefined) delete process.env.GRAPH_DB_USERNAME; else process.env.GRAPH_DB_USERNAME = original;
+  }
+});
+
+test('saveGraph without GRAPH_DB_USERNAME still resolves a non-null author (falls back to the OS account name)', async () => {
+  const original = process.env.GRAPH_DB_USERNAME;
+  delete process.env.GRAPH_DB_USERNAME;
+  try {
+    const graph = await db.saveGraph({ params: params(), points: points() });
+    assert.equal(typeof graph.metadata.author, 'string');
+    assert.ok(graph.metadata.author.length > 0);
+  } finally {
+    if (original !== undefined) process.env.GRAPH_DB_USERNAME = original;
+  }
+});
+
+test('saving the same graph again without an author preserves the previously-resolved author, never re-defaulting', async () => {
+  const original = process.env.GRAPH_DB_USERNAME;
+  process.env.GRAPH_DB_USERNAME = 'alice';
+  try {
+    const first = await db.saveGraph({ params: params(), points: points() });
+    process.env.GRAPH_DB_USERNAME = 'bob';
+    const second = await db.saveGraph({ params: params(), points: [{ a: 9, b: 9 }] });
+    assert.equal(second.metadata.author, first.metadata.author);
+  } finally {
+    if (original === undefined) delete process.env.GRAPH_DB_USERNAME; else process.env.GRAPH_DB_USERNAME = original;
+  }
 });
 
 test('loadGraph returns null for a hash that was never saved', async () => {
@@ -298,4 +395,92 @@ test('two graphs with different params never collide — each gets its own direc
   assert.notEqual(a.hash, b.hash);
   assert.deepEqual((await db.loadGraph(a.hash)).points, [{ a: 1, b: 2 }]);
   assert.deepEqual((await db.loadGraph(b.hash)).points, [{ a: 3, b: 4 }]);
+});
+
+// --- searchGraphs's unified free-text search (query.text) ------------------
+// "Searching should work across: title, code, tags, notes, owner, graph hash."
+
+test('searchGraphs query.text matches a substring of the title', async () => {
+  await db.saveGraph({ params: params({ angleA: 15 }), points: points(), title: 'Spiral Pattern' });
+  await db.saveGraph({ params: params({ angleA: 16 }), points: points(), title: 'Star Pattern' });
+  const results = await db.searchGraphs({ text: 'spiral' });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].title, 'Spiral Pattern');
+});
+
+test('searchGraphs query.text matches a substring of the code sequence', async () => {
+  await db.saveGraph({ params: params({ angleA: 15, sequenceText: '1 2 3' }), points: points() });
+  await db.saveGraph({ params: params({ angleA: 16, sequenceText: '9 9 9' }), points: points() });
+  const results = await db.searchGraphs({ text: '9 9' });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].codeSequence, '9 9 9');
+});
+
+test('searchGraphs query.text matches any tag', async () => {
+  await db.saveGraph({ params: params({ angleA: 15 }), points: points(), tags: ['homework', 'week1'] });
+  await db.saveGraph({ params: params({ angleA: 16 }), points: points(), tags: ['project'] });
+  const results = await db.searchGraphs({ text: 'week1' });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].angleA, 15);
+});
+
+test('searchGraphs query.text matches the author (owner)', async () => {
+  await db.saveGraph({ params: params({ angleA: 15 }), points: points(), author: 'alice' });
+  await db.saveGraph({ params: params({ angleA: 16 }), points: points(), author: 'bob' });
+  const results = await db.searchGraphs({ text: 'alice' });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].angleA, 15);
+});
+
+test('searchGraphs query.text matches a substring of the hash', async () => {
+  const saved = await db.saveGraph({ params: params({ angleA: 15 }), points: points() });
+  await db.saveGraph({ params: params({ angleA: 16 }), points: points() });
+  // A slice covering the angleA marker itself, since the two saved hashes
+  // share an identical prefix (same code sequence) up to that point.
+  const uniquePart = saved.hash.slice(saved.hash.indexOf('|a('));
+  const results = await db.searchGraphs({ text: uniquePart });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].hash, saved.hash);
+});
+
+test('searchGraphs query.text matches notes.md content, even though notes live in a separate file from metadata', async () => {
+  await db.saveGraph({ params: params({ angleA: 15 }), points: points(), notes: 'remember to check the boundary case' });
+  await db.saveGraph({ params: params({ angleA: 16 }), points: points(), notes: 'nothing special here' });
+  const results = await db.searchGraphs({ text: 'boundary case' });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].angleA, 15);
+});
+
+test('searchGraphs query.text is case-insensitive', async () => {
+  await db.saveGraph({ params: params({ angleA: 15 }), points: points(), title: 'UPPERCASE TITLE' });
+  const results = await db.searchGraphs({ text: 'uppercase' });
+  assert.equal(results.length, 1);
+});
+
+test('searchGraphs query.text returns no matches when nothing matches any field', async () => {
+  await db.saveGraph({ params: params({ angleA: 15 }), points: points(), title: 'Alpha' });
+  assert.deepEqual(await db.searchGraphs({ text: 'zzz-nonexistent-zzz' }), []);
+});
+
+test('searchGraphs query.text is ANDed with structured filters, not just ORed in', async () => {
+  await db.saveGraph({ params: params({ angleA: 15 }), points: points(), title: 'Alpha', favorite: true });
+  await db.saveGraph({ params: params({ angleA: 16 }), points: points(), title: 'Alpha', favorite: false });
+  const results = await db.searchGraphs({ text: 'alpha', favorite: true });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].angleA, 15);
+});
+
+test('searchGraphs never reads notes.md when query.text is not provided', async () => {
+  // Save a graph, then delete its notes.md out from under the database to
+  // prove a plain (non-text) search never even tries to read it — if it
+  // did, readTextIfExists would just fall back to '' silently anyway, so
+  // this really is testing "doesn't touch that file", not "handles it
+  // being missing".
+  const saved = await db.saveGraph({ params: params(), points: points(), notes: 'some notes', title: 'Graph One' });
+  const dir = path.join(tempDir, graphDirName(saved.hash));
+  await fs.rm(path.join(dir, 'notes.md'));
+  const results = await db.searchGraphs({ title: 'Graph' });
+  // No throw, and the graph is still found by title (notes.md being gone
+  // never breaks a non-text search).
+  assert.equal(results.length, 1);
 });

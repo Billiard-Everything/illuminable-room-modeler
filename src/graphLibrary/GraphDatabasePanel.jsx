@@ -148,8 +148,8 @@ export default function GraphDatabasePanel({ isOpen, onClose, onLoadGraph }) {
               type="text"
               value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
-              placeholder="Search by title…"
-              aria-label="Search by title"
+              placeholder="Search by title, code, tags, notes, owner, or hash…"
+              aria-label="Search by title, code, tags, notes, owner, or hash"
               className="w-full bg-transparent text-xs font-mono text-slate-100 outline-none placeholder:text-slate-600"
             />
           </label>
@@ -256,10 +256,11 @@ export default function GraphDatabasePanel({ isOpen, onClose, onLoadGraph }) {
                     <dt className="text-slate-500 mb-0.5">Code Sequence</dt>
                     <dd className="text-slate-100 font-mono break-all">{selectedGraph.codeSequence || '(empty)'}</dd>
                   </div>
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className="grid grid-cols-4 gap-2">
                     <div><dt className="text-slate-500">Angle A</dt><dd className="text-slate-100 font-mono">{selectedGraph.angleA}</dd></div>
                     <div><dt className="text-slate-500">Angle B</dt><dd className="text-slate-100 font-mono">{selectedGraph.angleB}</dd></div>
                     <div><dt className="text-slate-500">Angle Step</dt><dd className="text-slate-100 font-mono">{selectedGraph.angleStep}</dd></div>
+                    <div><dt className="text-slate-500">Base Length</dt><dd className="text-slate-100 font-mono">{selectedGraph.baseLength}</dd></div>
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <div><dt className="text-slate-500">Point Count</dt><dd className="text-slate-100 font-mono">{selectedGraph.pointCount.toLocaleString()}</dd></div>
@@ -268,6 +269,10 @@ export default function GraphDatabasePanel({ isOpen, onClose, onLoadGraph }) {
                   <div className="grid grid-cols-2 gap-2">
                     <div><dt className="text-slate-500">Created</dt><dd className="text-slate-100 font-mono">{new Date(selectedGraph.createdAt).toLocaleString()}</dd></div>
                     <div><dt className="text-slate-500">Modified</dt><dd className="text-slate-100 font-mono">{new Date(selectedGraph.modifiedAt).toLocaleString()}</dd></div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div><dt className="text-slate-500">Owner</dt><dd className="text-slate-100 font-mono">{selectedGraph.author || '—'}</dd></div>
+                    <div><dt className="text-slate-500">Visibility</dt><dd className="text-slate-100 font-mono capitalize">{selectedGraph.visibility}</dd></div>
                   </div>
                   <div>
                     <dt className="text-slate-500">Hash</dt>

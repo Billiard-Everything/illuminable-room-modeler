@@ -130,7 +130,11 @@ export const fetchLocalGraphDetails = async (hash, { timeoutMs = BROWSER_TIMEOUT
  * @param {string} [params.sort] - one of localGraphDatabaseConstants.js's LOCAL_GRAPH_SORT values.
  * @param {number} [params.limit]
  * @param {number} [params.offset]
- * @param {{title?: string, code?: string, angleA?: number, angleB?: number, baseLength?: number, favorite?: boolean, visibility?: string, tags?: string[]}} [params.search]
+ * @param {{text?: string, title?: string, code?: string, angleA?: number, angleB?: number, baseLength?: number, favorite?: boolean, visibility?: string, tags?: string[]}} [params.search] -
+ *   `text` is the browser's one free-text search box — matches across
+ *   title/code/tags/notes/owner/hash server-side (see graphDatabase.js's
+ *   own searchGraphs comment); every other field is an exact/structured
+ *   filter, ANDed with `text` when both are present.
  * @param {{timeoutMs?: number}} [options]
  * @returns {Promise<{graphs: Array, error: boolean}>} `error: true` on any
  *   failure (never thrown) — kept distinct from an empty `graphs` array so
@@ -143,12 +147,13 @@ export const fetchLocalGraphLibraryPage = async ({ sort, limit, offset, search =
   if (limit !== undefined) queryParams.set('limit', String(limit));
   if (offset !== undefined) queryParams.set('offset', String(offset));
 
-  const hasSearch = search.title || search.code
+  const hasSearch = search.text || search.title || search.code
     || (search.angleA !== undefined && search.angleA !== '')
     || (search.angleB !== undefined && search.angleB !== '')
     || (search.baseLength !== undefined && search.baseLength !== '')
     || search.favorite || search.visibility || (search.tags && search.tags.length > 0);
   if (hasSearch) {
+    if (search.text) queryParams.set('q', search.text);
     if (search.title) queryParams.set('title', search.title);
     if (search.code) queryParams.set('code', search.code);
     if (search.angleA !== undefined && search.angleA !== '') queryParams.set('angleA', String(search.angleA));

@@ -366,6 +366,19 @@ test('GET /api/local-graphs/search calls searchGraphs with the parsed query and 
   server.close();
 });
 
+test('GET /api/local-graphs/search?q=... calls searchGraphs with { text }', async () => {
+  let receivedQuery = null;
+  const { server, baseUrl } = await startTestServer(createFakeRepository(), {
+    graphDatabase: createFakeGraphDatabase({
+      searchGraphs: async (query) => { receivedQuery = query; return []; },
+    }),
+  });
+  const res = await fetch(`${baseUrl}/api/local-graphs/search?${new URLSearchParams({ q: 'boundary case' })}`);
+  assert.equal(res.status, 200);
+  assert.deepEqual(receivedQuery, { text: 'boundary case' });
+  server.close();
+});
+
 test('PATCH /api/local-graphs/:hash updates metadata via updateGraphMetadata and returns { updated: true, metadata }', async () => {
   let receivedHash = null;
   let receivedUpdates = null;
