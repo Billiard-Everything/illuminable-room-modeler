@@ -89,6 +89,18 @@ the cross-file architecture map.
 - Delegates every mutation to `App.jsx`, preserving the current sequence
   validation, active-row selection, and AnglePlotWindow generation pipeline.
 
+### `src/anglePlot/backgroundExactWorker.js` & Rendering Engine
+
+- Offloads computationally heavy brute-force and adaptive graph rendering away from the main UI thread.
+- Uses hybrid sampling policies (`rendererSelection.js`, `renderSamplingPolicy.js`) to intelligently toggle between exhaustive brute-force plotting and bounded adaptive algorithms.
+- Supported by an in-memory `GraphCache` to avoid re-rendering untouched state.
+
+### `server/` (Backend Graph Database API)
+
+- An Express.js backend exposing REST routes to persist graph models into a PostgreSQL database.
+- Used for saving, tagging, favoriting, and retrieving shared or local graph definitions.
+- Includes migrations (`server/db/migrations/`) to initialize table structures (Users, Graphs, Graph Geometry, etc.).
+
 ### `vite.config.js`
 
 - Enables the React Vite plugin for JSX transformation and fast refresh.

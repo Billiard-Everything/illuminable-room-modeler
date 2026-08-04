@@ -3,7 +3,7 @@
 This document records a read-only pass through the project logic as of this
 directory. The pass covered:
 
-- `src/App.jsx`: the complete UI and all computation currently used by the app.
+- `src/App.jsx`: the main UI shell, delegating rendering to background workers.
 - `src/index.css`, `package.json`, and `vite.config.js`: app shell/build setup.
 - Parent reference notes under `../docs/source-study/`, especially the architecture,
   unfolding, code-sequence, and frontend notes from the larger billiards project.
@@ -88,7 +88,11 @@ floating-point evidence and visualization only.
 |-- src/
 |   |-- main.jsx
 |   |-- index.css
-|   `-- App.jsx
+|   |-- App.jsx
+|   |-- anglePlot/ (workers and renderers)
+|   |-- graphLibrary/ (database panels)
+|   `-- sequences/ (setup cards)
+|-- server/ (PostgreSQL graph database)
 `-- public/
     |-- favicon.svg
     `-- icons.svg
@@ -102,8 +106,7 @@ Runtime stack:
   `@import "tailwindcss";` in `src/index.css`.
 - `lucide-react` supplies UI icons.
 
-All current math and UI state live in `src/App.jsx`. There is no backend, no
-worker, and no persistence layer.
+Most geometric state originates from `src/App.jsx`, but computation is now delegated to `src/anglePlot/backgroundExactWorker.js` to prevent UI freezing. The app also features a Node.js/PostgreSQL backend (`server/`) for shared graph persistence.
 
 ## Coordinate Systems
 
