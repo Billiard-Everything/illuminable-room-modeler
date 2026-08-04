@@ -30,10 +30,12 @@ test('getFile returns null (never throws) for a 404', async () => {
   assert.equal(await client.getFile('graphs/missing/metadata.json'), null);
 });
 
-test('getFile throws for a non-404 failure', async () => {
-  const fetchImpl = async () => ({ ok: false, status: 500, statusText: 'Internal Server Error' });
+test('getFile throws for a non-404 failure, including GitHub\'s own error message in the thrown Error', async () => {
+  const fetchImpl = async () => ({
+    ok: false, status: 401, statusText: 'Unauthorized', text: async () => JSON.stringify({ message: 'Bad credentials' }),
+  });
   const client = buildClient(fetchImpl);
-  await assert.rejects(() => client.getFile('graphs/x/metadata.json'), /500/);
+  await assert.rejects(() => client.getFile('graphs/x/metadata.json'), /401.*Bad credentials/s);
 });
 
 test('putFile PUTs base64-encoded content with the branch, and omits sha when creating a new file', async () => {
@@ -62,10 +64,13 @@ test('putFile includes sha when updating an existing file', async () => {
   assert.equal(capturedBody.sha, 'old-sha');
 });
 
-test('putFile throws on a non-ok response', async () => {
-  const fetchImpl = async () => ({ ok: false, status: 422, statusText: 'Unprocessable Entity' });
+test('putFile throws on a non-ok response, including GitHub\'s own error message (e.g. a stale-sha conflict)', async () => {
+  const fetchImpl = async () => ({
+    ok: false, status: 422, statusText: 'Unprocessable Entity',
+    text: async () => JSON.stringify({ message: 'sha does not match' }),
+  });
   const client = buildClient(fetchImpl);
-  await assert.rejects(() => client.putFile('graphs/x/metadata.json', '{}'), /422/);
+  await assert.rejects(() => client.putFile('graphs/x/metadata.json', '{}'), /422.*sha does not match/s);
 });
 
 test('deleteFile DELETEs with the provided sha', async () => {
@@ -103,11 +108,11 @@ test('deleteFile is a no-op (never throws) when the file is already gone', async
   await assert.doesNotReject(() => client.deleteFile('graphs/x/metadata.json'));
 });
 
-test('deleteFile throws for a non-ok, non-404 failure', async () => {
+test('deleteFile throws for a non-ok, non-404 failure, including GitHub\'s own error message', async () => {
   const fetchImpl = async (url, options) => {
     if (!options || options.method === undefined) return { ok: true, status: 200, json: async () => ({ content: encode('x'), sha: 's' }) };
-    return { ok: false, status: 500, statusText: 'Internal Server Error' };
+    return { ok: false, status: 500, statusText: 'Internal Server Error', text: async () => JSON.stringify({ message: 'server error' }) };
   };
   const client = buildClient(fetchImpl);
-  await assert.rejects(() => client.deleteFile('graphs/x/metadata.json'), /500/);
+  await assert.rejects(() => client.deleteFile('graphs/x/metadata.json'), /500.*server error/s);
 });

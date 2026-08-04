@@ -10,6 +10,7 @@
     "dev": "vite",
     "server:api": "node server/api/start.js",
     "migrate": "node server/db/migrate.js",
+    "debug:github-upload": "node server/graphDatabase/debugGithubUpload.mjs",
     "build": "vite build",
     "lint": "eslint .",
     "test": "node --test tests/*.test.mjs",

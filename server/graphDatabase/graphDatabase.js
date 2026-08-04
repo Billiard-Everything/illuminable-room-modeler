@@ -320,15 +320,26 @@ export const createGraphDatabase = (baseDir) => {
  * fallback (see githubGraphDatabase.js's own header comment on why), so a
  * GitHub outage degrades this app back to its prior local-only behavior
  * instead of breaking plotting.
+ *
+ * Always logs which backend it picked, and why — a silent, correctly-
+ * working local fallback looks IDENTICAL from the outside to "GitHub was
+ * never wired up at all" (both just quietly work against local disk), so
+ * this one log line at boot is what actually answers "is the GitHub
+ * upload path even being called" before a single request ever comes in.
+ * Never logs the token itself, only whether one is present.
  */
-const resolveDefaultGraphDatabase = () => {
+export const resolveDefaultGraphDatabase = () => {
   const { GITHUB_TOKEN, GITHUB_OWNER, GITHUB_REPO, GITHUB_BRANCH } = process.env;
   const local = createGraphDatabase();
   if (GITHUB_TOKEN && GITHUB_OWNER && GITHUB_REPO) {
-    return createGithubGraphDatabase({
-      token: GITHUB_TOKEN, owner: GITHUB_OWNER, repo: GITHUB_REPO, branch: GITHUB_BRANCH || 'main', fallback: local,
-    });
+    const branch = GITHUB_BRANCH || 'main';
+    console.log(`[graph-database] GitHub-backed storage ENABLED — ${GITHUB_OWNER}/${GITHUB_REPO}@${branch} (local disk is the fallback only, used when GitHub is unreachable)`);
+    return createGithubGraphDatabase({ token: GITHUB_TOKEN, owner: GITHUB_OWNER, repo: GITHUB_REPO, branch, fallback: local });
   }
+  const missing = [
+    !GITHUB_TOKEN && 'GITHUB_TOKEN', !GITHUB_OWNER && 'GITHUB_OWNER', !GITHUB_REPO && 'GITHUB_REPO',
+  ].filter(Boolean);
+  console.log(`[graph-database] GitHub-backed storage NOT configured (missing: ${missing.join(', ')}) — using local disk only.`);
   return local;
 };
 

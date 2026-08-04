@@ -91,9 +91,12 @@ const graphDir = (id) => `graphs/${id}`;
 const metadataPath = (id) => `${graphDir(id)}/metadata.json`;
 const pointsPath = (id) => `${graphDir(id)}/points.json`;
 
-const devWarn = (operation, err) => {
-  console.warn(`[github-graph-database] ${operation} failed, falling back to local storage:`, err?.message ?? err);
+/** A GitHub call actually threw (network/auth/API error, not just "not found") — always logged loudly, since this is the one thing standing between "the shared library is working" and "everything is silently landing on Render's own ephemeral disk instead" (see this module's own header comment). */
+const logFailure = (operation, err) => {
+  console.error(`[github-graph-database] ${operation} FAILED, falling back to local storage — ${err?.message ?? err}`);
 };
+
+const logSuccess = (...args) => console.log('[github-graph-database]', ...args);
 
 /** Converts a saveGraph-style input (+ its computed hash/id) into this repo's own stored metadata.json shape (requirement #2's field list). */
 const toRepoMetadata = ({ params, points, title, author, graphColorHex, tags, favorite, visibility, notes }, hash, id, existing) => ({
@@ -204,9 +207,10 @@ export const createGithubGraphDatabase = ({ token, owner, repo, branch = 'main',
         await putJsonFile(pointsPath(id), input.points, `Save graph points ${id}`);
         await writeIndex(upsert(entries, repoMetadata), indexSha, (freshEntries) => upsert(freshEntries, repoMetadata));
 
+        logSuccess(`saveGraph OK — graphs/${id}/ (title="${repoMetadata.title}", ${input.points.length} points), database/index.json updated`);
         return toGraphObject(repoMetadata, input.points);
       } catch (err) {
-        devWarn('saveGraph', err);
+        logFailure('saveGraph', err);
         return fallback.saveGraph(input);
       }
     },
@@ -220,7 +224,7 @@ export const createGithubGraphDatabase = ({ token, owner, repo, branch = 'main',
         const points = pointsFile ? JSON.parse(pointsFile.text) : [];
         return toGraphObject(entry, points);
       } catch (err) {
-        devWarn('loadGraph', err);
+        logFailure('loadGraph', err);
         return fallback.loadGraph(hash);
       }
     },
@@ -230,7 +234,7 @@ export const createGithubGraphDatabase = ({ token, owner, repo, branch = 'main',
         const entry = await findByHash(hash);
         return entry ? true : fallback.graphExists(hash);
       } catch (err) {
-        devWarn('graphExists', err);
+        logFailure('graphExists', err);
         return fallback.graphExists(hash);
       }
     },
@@ -244,8 +248,9 @@ export const createGithubGraphDatabase = ({ token, owner, repo, branch = 'main',
         await client.deleteFile(pointsPath(entry.id));
         const remaining = entries.filter((e) => e.id !== entry.id);
         await writeIndex(remaining, indexSha, (freshEntries) => freshEntries.filter((e) => e.id !== entry.id));
+        logSuccess(`deleteGraph OK — graphs/${entry.id}/ removed, database/index.json updated`);
       } catch (err) {
-        devWarn('deleteGraph', err);
+        logFailure('deleteGraph', err);
         await fallback.deleteGraph(hash);
       }
     },
@@ -256,10 +261,19 @@ export const createGithubGraphDatabase = ({ token, owner, repo, branch = 'main',
 
     /** @returns {Promise<object>} the updated metadata, in the same shape graphDatabase.js's own local store returns. */
     async updateGraphMetadata(hash, updates = {}) {
+      const { entries, sha: indexSha } = await readIndex().catch((err) => {
+        logFailure('updateGraphMetadata (reading index)', err);
+        return { entries: null, sha: undefined };
+      });
+      if (entries === null) return fallback.updateGraphMetadata(hash, updates);
+
+      const entry = entries.find((e) => e.graphHash === hash) ?? null;
+      // Not a GitHub failure — this hash simply isn't on GitHub (maybe it
+      // only ever existed locally) — no logFailure for the plain-miss case,
+      // matching loadGraph/graphExists' own identical reasoning above.
+      if (!entry) return fallback.updateGraphMetadata(hash, updates);
+
       try {
-        const { entries, sha: indexSha } = await readIndex();
-        const entry = entries.find((e) => e.graphHash === hash) ?? null;
-        if (!entry) throw new Error(`No graph stored for hash: ${hash}`);
         const updated = {
           ...entry,
           title: updates.title !== undefined ? updates.title : entry.title,
@@ -273,9 +287,10 @@ export const createGithubGraphDatabase = ({ token, owner, repo, branch = 'main',
         };
         await putJsonFile(metadataPath(entry.id), updated, `Update graph metadata ${entry.id}`);
         await writeIndex(upsert(entries, updated), indexSha, (freshEntries) => upsert(freshEntries, updated));
+        logSuccess(`updateGraphMetadata OK — graphs/${entry.id}/metadata.json, database/index.json updated`);
         return fromRepoMetadata(updated);
       } catch (err) {
-        devWarn('updateGraphMetadata', err);
+        logFailure('updateGraphMetadata', err);
         return fallback.updateGraphMetadata(hash, updates);
       }
     },
@@ -293,7 +308,7 @@ export const createGithubGraphDatabase = ({ token, owner, repo, branch = 'main',
         });
         return converted;
       } catch (err) {
-        devWarn('listGraphs', err);
+        logFailure('listGraphs', err);
         return fallback.listGraphs({ sortBy, order });
       }
     },
@@ -340,7 +355,7 @@ export const createGithubGraphDatabase = ({ token, owner, repo, branch = 'main',
         });
         return converted;
       } catch (err) {
-        devWarn('searchGraphs', err);
+        logFailure('searchGraphs', err);
         return fallback.searchGraphs(query, options);
       }
     },
