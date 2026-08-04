@@ -23,7 +23,7 @@
 //   GET  /api/graphs/:hash       getGraphWithGeometry (download — the one route that returns geometry)
 //   POST /api/graphs             uploadExactGraphIfMissing
 //   GET    /api/local-graphs        graphDatabase.listGraphs    (browse/sort, metadata only)
-//   GET    /api/local-graphs/search graphDatabase.searchGraphs  (title/code/angle/tag/favorite search, metadata only)
+//   GET    /api/local-graphs/search graphDatabase.searchGraphs  (q=free text across title/code/tags/notes/owner/hash, plus exact-field filters — metadata only)
 //   GET    /api/local-graphs/:hash  graphDatabase.loadGraph     (file-based local GraphDatabase — permanent cache; the one route that returns points)
 //   POST   /api/local-graphs        graphDatabase.saveGraph
 //   PATCH  /api/local-graphs/:hash  graphDatabase.updateGraphMetadata (rename/favorite/tags/notes/visibility/color — never points)

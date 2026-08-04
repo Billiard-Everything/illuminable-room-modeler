@@ -165,6 +165,15 @@ test('fetchLocalGraphLibraryPage routes to GET /api/local-graphs/search the mome
   assert.match(capturedUrl, /code=RRL/);
 });
 
+test('fetchLocalGraphLibraryPage sends search.text as the q query param, and routes to /search on its own', async () => {
+  let capturedUrl;
+  globalThis.fetch = async (url) => { capturedUrl = url; return { ok: true, json: async () => ({ graphs: [] }) }; };
+  await fetchLocalGraphLibraryPage({ search: { text: 'boundary case' } });
+  const url = new URL(capturedUrl);
+  assert.match(capturedUrl, /\/api\/local-graphs\/search\?/);
+  assert.equal(url.searchParams.get('q'), 'boundary case');
+});
+
 test('fetchLocalGraphLibraryPage passes sort/limit/offset as query params', async () => {
   let capturedUrl;
   globalThis.fetch = async (url) => { capturedUrl = url; return { ok: true, json: async () => ({ graphs: [] }) }; };

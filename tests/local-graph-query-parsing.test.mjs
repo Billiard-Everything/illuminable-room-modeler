@@ -45,3 +45,14 @@ test('parseLocalSearchQuery parses a comma-separated tags query param into an ar
 test('parseLocalSearchQuery returns {} when nothing is present', () => {
   assert.deepEqual(parseLocalSearchQuery(params({})), {});
 });
+
+test('parseLocalSearchQuery maps q -> text (the free-text cross-field search box)', () => {
+  assert.deepEqual(parseLocalSearchQuery(params({ q: 'boundary case' })), { text: 'boundary case' });
+});
+
+test('parseLocalSearchQuery combines q with structured filters', () => {
+  assert.deepEqual(
+    parseLocalSearchQuery(params({ q: 'alice', favorite: 'true' })),
+    { text: 'alice', favorite: true },
+  );
+});
