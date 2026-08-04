@@ -36,53 +36,25 @@
 //   GraphLibrary/graph_<hash>/notes.md
 
 import path from 'node:path';
-import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { hashGraph, GRAPH_HASH_ALGORITHM_VERSION } from '../../src/anglePlot/graphHasher.js';
 import {
   resolveLibraryDir, graphDirPath, atomicWriteJson, atomicWriteFile,
   readJsonIfExists, readTextIfExists, pathExists, ensureDir, removeDir, listGraphDirs,
 } from './graphFileStore.js';
+import { GRAPH_VISIBILITY, resolveDefaultAuthor, buildNotesPreview } from './graphDatabaseShared.js';
+import { createGithubGraphDatabase } from './githubGraphDatabase.js';
 
 const METADATA_FILE = 'metadata.json';
 const POINTS_FILE = 'points.json';
 const NOTES_FILE = 'notes.md';
 
-/** Allowed values for a graph's `visibility` metadata field. Plain data — see this module's own header comment on why this isn't an enforced permission system. */
-export const GRAPH_VISIBILITY = { PRIVATE: 'private', SHARED: 'shared', PUBLIC: 'public' };
-
-/**
- * The `author`/"owner" a brand-new graph gets when nothing explicit was
- * passed — this app has no login system (see this module's own non-goals),
- * so there's no real user identity to record. An explicit GRAPH_DB_USERNAME
- * env var wins if set; otherwise this machine's own OS account name is a
- * reasonable, zero-configuration stand-in for "whoever computed this graph
- * on this machine" — good enough for the Graph Database browser's own
- * "owner" card field without inventing an accounts system for it. Falls
- * back to null (rather than throwing) in a sandboxed/containerized
- * environment where os.userInfo() itself can throw.
- */
-const resolveDefaultAuthor = () => {
-  if (process.env.GRAPH_DB_USERNAME) return process.env.GRAPH_DB_USERNAME;
-  try {
-    return os.userInfo().username || null;
-  } catch {
-    return null;
-  }
-};
+export { GRAPH_VISIBILITY };
 
 const range = (values) => {
   const finite = values.filter(Number.isFinite);
   if (finite.length === 0) return { min: null, max: null };
   return { min: Math.min(...finite), max: Math.max(...finite) };
-};
-
-const NOTES_PREVIEW_LENGTH = 80;
-
-/** A short, single-line excerpt of `notes` for card display without reading notes.md during a listing — see buildMetadata's own `notesPreview` field. */
-const buildNotesPreview = (notes) => {
-  const collapsed = notes.replace(/\s+/g, ' ').trim();
-  return collapsed.length <= NOTES_PREVIEW_LENGTH ? collapsed : `${collapsed.slice(0, NOTES_PREVIEW_LENGTH - 1)}…`;
 };
 
 /**
@@ -332,8 +304,37 @@ export const createGraphDatabase = (baseDir) => {
   };
 };
 
+/**
+ * Resolves which GraphDatabase the default `graphDatabase` singleton below
+ * actually uses. Render already has GITHUB_TOKEN/GITHUB_OWNER/GITHUB_REPO/
+ * (optionally GITHUB_BRANCH) configured — the moment all three required
+ * ones are present, this app becomes GitHub-repo-backed (see
+ * githubGraphDatabase.js), so the professor and every student see one
+ * shared, permanent library over the website with no local install and no
+ * IDE, satisfying "only the Render backend may communicate with
+ * [the shared store]; never expose credentials to the frontend" — those
+ * three env vars never leave this process. An unconfigured local
+ * dev/checkout (the common case for anyone hacking on this repo) behaves
+ * exactly as it always did: plain local disk, zero required setup. Either
+ * way, the local instance also becomes the GitHub-backed store's own
+ * fallback (see githubGraphDatabase.js's own header comment on why), so a
+ * GitHub outage degrades this app back to its prior local-only behavior
+ * instead of breaking plotting.
+ */
+const resolveDefaultGraphDatabase = () => {
+  const { GITHUB_TOKEN, GITHUB_OWNER, GITHUB_REPO, GITHUB_BRANCH } = process.env;
+  const local = createGraphDatabase();
+  if (GITHUB_TOKEN && GITHUB_OWNER && GITHUB_REPO) {
+    return createGithubGraphDatabase({
+      token: GITHUB_TOKEN, owner: GITHUB_OWNER, repo: GITHUB_REPO, branch: GITHUB_BRANCH || 'main', fallback: local,
+    });
+  }
+  return local;
+};
+
 // The default library instance — GRAPH_LIBRARY_DIR env var, or
-// ./GraphLibrary. Not auto-created on import (see ensureDir's own call
-// site, inside saveGraph): importing this module never touches the
-// filesystem by itself.
-export const graphDatabase = createGraphDatabase();
+// ./GraphLibrary, unless GitHub-repo-backed storage is configured (see
+// resolveDefaultGraphDatabase above). Not auto-created on import (see
+// ensureDir's own call site, inside saveGraph): importing this module
+// never touches the filesystem (or GitHub) by itself.
+export const graphDatabase = resolveDefaultGraphDatabase();
