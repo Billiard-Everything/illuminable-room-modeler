@@ -9,3 +9,14 @@ this is a second butto beside dark/light mode button
 
 ///////////////
 interchange x <-> z
+
+Aug 5 improvements:
+1. Graph Plotter UI, show all, hide all button redundant. Hide/Show individual graph button should be made easier right on the graph, 
+not in edit graph tab.
+2. UI redeisign, should be made simple, easy to use, with clear instructions, and prefer a side tab for settings, and main screen next 
+to it with the graph.
+3. Integrate the graph plotting feature to main app where the side bar is still there while we can switch the right side of the screen 
+between unfold code mode and the graph plotting tool. (like the Trace Ray mode button)
+4. Rename "Ghost" mode to "Unconstrained"
+
+*5. Trace Ray mode development: fix ui for triangle setup; add sequence code output given triangle and angle.
