@@ -1,7 +1,7 @@
 // React supplies state, refs, effects, and memoization for this client-only tool.
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 // Lucide supplies recognizable control/status icons without custom SVG code.
-import { Maximize, RefreshCw, RotateCcw, Zap, Settings2, List, Code2, Compass, ChevronRight, ChevronLeft, Activity, CheckCircle2, XCircle, ShieldCheck, Eye, Search, AlertTriangle, Sun, Moon, ZoomIn, ZoomOut, Lock, Unlock, ScatterChart, Plus, Loader2, Trash2, Library, Database } from 'lucide-react';
+import { Maximize, RefreshCw, RotateCcw, Zap, Settings2, List, Code2, Compass, ChevronRight, ChevronLeft, Activity, CheckCircle2, XCircle, ShieldCheck, Eye, EyeOff, Search, AlertTriangle, Sun, Moon, ZoomIn, ZoomOut, Lock, Unlock, ScatterChart, Plus, Loader2, Trash2, Library, Database } from 'lucide-react';
 // The angle-region plot pop-up lives in its own module (see src/anglePlot) so
 // it can be unit-tested without React and does not bloat this file further.
 import GraphSetupWindow from './sequences/GraphSetupWindow.jsx';
@@ -1627,6 +1627,7 @@ const jobPriorityForSequence = (seq, activeSequenceId, everRequestedIds) => {
 const GraphSimulatorView = ({
   sequences, activeSequenceId, angleParams, baseLength, buildValidateCandidateForSequence, refreshToken,
   onEditGraphs, onRowStatusChange, forceGenerateRequest,
+  onShowAllGraphs, onHideAllGraphs, onToggleSequenceVisible,
   initialIsViewLocked, initialLegendCollapsed,
   initialPanelZoom, initialPanelPan,
   onWorkspaceStateChange
@@ -2392,27 +2393,55 @@ const GraphSimulatorView = ({
 
       {/* Legend */}
       <div className="border-b border-white/10 shrink-0">
-        <button
-          type="button"
-          onClick={() => setLegendCollapsed((c) => !c)}
-          className="w-full flex items-center justify-between px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-500 hover:text-slate-200"
-        >
-          <span>Legend ({sequences.length})</span>
-          <span>{legendCollapsed ? 'Show' : 'Hide'}</span>
-        </button>
+        <div className="flex items-center justify-between px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+          <button
+            type="button"
+            onClick={() => setLegendCollapsed((c) => !c)}
+            className="flex items-center gap-1.5 hover:text-slate-200 transition-colors"
+          >
+            <span>Legend ({sequences.length})</span>
+            <span className="font-normal text-[9px] text-slate-500">({legendCollapsed ? 'Show' : 'Hide'})</span>
+          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={onShowAllGraphs}
+              className="flex items-center gap-1 rounded-md border border-cyan-400/40 bg-cyan-500/20 px-2 py-0.5 text-[10px] font-bold text-cyan-100 transition-colors hover:bg-cyan-500/30"
+              title="Show all graphs in the plot"
+            >
+              <Eye className="w-3 h-3" /> Show All
+            </button>
+            <button
+              type="button"
+              onClick={onHideAllGraphs}
+              className="flex items-center gap-1 rounded-md border border-white/10 bg-[#0b1016] px-2 py-0.5 text-[10px] font-bold text-slate-300 transition-colors hover:bg-[#172230]"
+              title="Hide all graphs from the plot"
+            >
+              <EyeOff className="w-3 h-3" /> Hide All
+            </button>
+          </div>
+        </div>
         {!legendCollapsed && (
           <div className="flex flex-wrap content-start gap-1.5 px-3 pb-2 h-24 overflow-y-auto custom-scrollbar">
             {sequences.map((seq) => (
               <div
                 key={seq.id}
                 title={`${seq.label}: ${seq.sequenceText || '(empty)'} · Step ${seq.angleStepInput} · ${seq.id === activeSequenceId ? 'active in main view · ' : ''}${rowStatusText(seq)}`}
-                className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-[10px] font-mono ${seq.visible ? 'border-white/10 bg-[#0b1016] text-slate-300' : 'border-white/10 bg-[#0b1016] text-slate-600'}`}
+                className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-[10px] font-mono transition-colors ${seq.visible ? 'border-white/10 bg-[#0b1016] text-slate-200' : 'border-white/10 bg-[#0b1016]/60 text-slate-400 opacity-80'}`}
               >
-                <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: seq.color, opacity: seq.visible ? 1 : 0.4 }} />
+                <input
+                  type="checkbox"
+                  checked={seq.visible}
+                  onChange={() => onToggleSequenceVisible?.(seq.id)}
+                  aria-label={`Show ${seq.label} in the graph`}
+                  title={seq.visible ? `Hide ${seq.label} from the graph` : `Show ${seq.label} in the graph`}
+                  className="w-3.5 h-3.5 shrink-0 accent-cyan-400 cursor-pointer"
+                />
+                <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: seq.color, opacity: seq.visible ? 1 : 0.5 }} />
                 <span className="font-bold shrink-0">{seq.label}{seq.id === activeSequenceId ? ' •' : ''}</span>
-                <span className="text-slate-500">&ldquo;{truncateSequenceText(seq.sequenceText, 16)}&rdquo;</span>
-                <span className="text-slate-500">step {seq.angleStepInput}</span>
-                <span className="text-slate-600">{rowStatusText(seq)}</span>
+                <span className={seq.visible ? 'text-slate-400' : 'text-slate-500'}>&ldquo;{truncateSequenceText(seq.sequenceText, 16)}&rdquo;</span>
+                <span className={seq.visible ? 'text-slate-400' : 'text-slate-500'}>step {seq.angleStepInput}</span>
+                <span className="text-slate-500">{rowStatusText(seq)}</span>
               </div>
             ))}
           </div>
@@ -4415,6 +4444,9 @@ export default function App() {
             onEditGraphs={() => setIsGraphSetupOpen(true)}
             onRowStatusChange={(id, info) => setPlotStatusById(prev => ({ ...prev, [id]: info }))}
             forceGenerateRequest={forceGenerateRequest}
+            onShowAllGraphs={() => setSequences(rows => rows.map(r => ({ ...r, visible: true })))}
+            onHideAllGraphs={() => setSequences(rows => rows.map(r => ({ ...r, visible: false })))}
+            onToggleSequenceVisible={handleToggleSequenceVisible}
             initialIsViewLocked={restoredWorkspace?.anglePlotWindow?.isViewLocked}
             initialLegendCollapsed={restoredWorkspace?.anglePlotWindow?.legendCollapsed}
             initialPanelZoom={restoredWorkspace?.anglePlotWindow?.panelZoom}

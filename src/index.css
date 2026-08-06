@@ -197,6 +197,10 @@ button {
   background-color: var(--control-bg);
 }
 
+.app-theme-light [class~="bg-[#0b1016]/60"] {
+  background-color: rgb(241 245 249 / 0.95);
+}
+
 .app-theme-light [class~="bg-[#0b1016]/80"] {
   background-color: rgb(255 255 255 / 0.86);
 }
