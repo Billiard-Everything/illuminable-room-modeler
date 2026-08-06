@@ -2511,6 +2511,9 @@ export default function App() {
   const [rayStartVertex, setRayStartVertex] = useState(() => restoredWorkspace?.rayStartVertex ?? 0);
   // Ray-mode angle is stored in degrees because that is what the UI exposes.
   const [rayAngle, setRayAngle] = useState(() => restoredWorkspace?.rayAngle ?? 60);
+  // Base geometry angles for Trace Ray mode
+  const [rayAngleA, setRayAngleA] = useState(() => restoredWorkspace?.rayAngleA ?? 15);
+  const [rayAngleB, setRayAngleB] = useState(() => restoredWorkspace?.rayAngleB ?? 50);
   // Ray-mode bounce limit prevents accidental infinite or huge unfoldings.
   const [maxBounces, setMaxBounces] = useState(() => restoredWorkspace?.maxBounces ?? 15);
 
@@ -2549,10 +2552,10 @@ export default function App() {
   // validators, findStableRegion, etc.) keeps working unchanged against
   // this same {a, b, length} shape.
   const angleParams = useMemo(() => ({
-    a: activeSequence?.angleA ?? 15,
-    b: activeSequence?.angleB ?? 50,
+    a: simulatorMode === 'ray' ? rayAngleA : (activeSequence?.angleA ?? 15),
+    b: simulatorMode === 'ray' ? rayAngleB : (activeSequence?.angleB ?? 50),
     length: baseTriangleLength,
-  }), [activeSequence, baseTriangleLength]);
+  }), [simulatorMode, rayAngleA, rayAngleB, activeSequence, baseTriangleLength]);
   // Space-separated integer blocks are parsed into symbolic angle runs.
   // Kept as a read-only alias (instead of renaming every downstream use)
   // so the rest of this file's geometry/validation logic, which predates
@@ -2684,6 +2687,8 @@ export default function App() {
     baseCoordsInput,
     rayStartVertex,
     rayAngle,
+    rayAngleA,
+    rayAngleB,
     maxBounces,
     sequences,
     nextSequenceNumber: nextSequenceNumberRef.current,
@@ -2729,7 +2734,7 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     theme, isSidebarVisible, simulatorMode, baseInputMode, baseTriangleLength,
-    angleStepControlIncrementInput, baseCoordsInput, rayStartVertex, rayAngle, maxBounces,
+    angleStepControlIncrementInput, baseCoordsInput, rayStartVertex, rayAngle, rayAngleA, rayAngleB, maxBounces,
     sequences, activeSequenceId, shotEditMode, clearanceEpsilonInput, showAllLabels,
     displayPrecisionInput, pan, zoom, isZoomLocked, zoomMagnification,
   ]);
@@ -3110,6 +3115,9 @@ export default function App() {
     clearShotFeedback();
     if (field === 'length') {
       setBaseTriangleLength(value);
+    } else if (simulatorMode === 'ray') {
+      if (field === 'a') setRayAngleA(value);
+      if (field === 'b') setRayAngleB(value);
     } else {
       // Angle A/B belong to the active row only; every other row is untouched.
       const rowField = field === 'a' ? 'angleA' : 'angleB';
@@ -3829,6 +3837,32 @@ export default function App() {
               </div>
             ) : (
               <div className="space-y-2.5">
+                {simulatorMode === 'ray' && (
+                  <>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] font-bold text-slate-500 w-16 text-right mr-1">Angle A</span>
+                      <input
+                        type="number"
+                        step="any"
+                        value={angleParams.a}
+                        onChange={e => handleAngleParamChange('a', e.target.value)}
+                        placeholder="Angle A"
+                        className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2.5 py-1.5 text-sm focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 placeholder:text-slate-600 transition-all"
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] font-bold text-slate-500 w-16 text-right mr-1">Angle B</span>
+                      <input
+                        type="number"
+                        step="any"
+                        value={angleParams.b}
+                        onChange={e => handleAngleParamChange('b', e.target.value)}
+                        placeholder="Angle B"
+                        className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2.5 py-1.5 text-sm focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 placeholder:text-slate-600 transition-all"
+                      />
+                    </div>
+                  </>
+                )}
                 {/* Angle A, Angle B, Angle Step, and Plot Valid Angle Region
                     now live on each graph's own card (Sequence Parser list
                     below) so every graph keeps fully independent values —
