@@ -1,7 +1,7 @@
 // React supplies state, refs, effects, and memoization for this client-only tool.
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 // Lucide supplies recognizable control/status icons without custom SVG code.
-import { Maximize, RotateCcw, Zap, Settings2, List, Code2, Compass, ChevronRight, ChevronLeft, Activity, CheckCircle2, XCircle, ShieldCheck, Eye, EyeOff, Search, AlertTriangle, Sun, Moon, ZoomIn, ZoomOut, Lock, Unlock, ScatterChart, Plus, Loader2, Trash2, Library, Database } from 'lucide-react';
+import { Maximize, RotateCcw, Zap, Settings2, List, Code2, Compass, ChevronRight, ChevronLeft, Activity, CheckCircle2, XCircle, ShieldCheck, Eye, EyeOff, Search, AlertTriangle, Sun, Moon, ZoomIn, ZoomOut, Lock, Unlock, ScatterChart, Plus, Loader2, Trash2, Library, Database, Copy } from 'lucide-react';
 // The angle-region plot pop-up lives in its own module (see src/anglePlot) so
 // it can be unit-tested without React and does not bloat this file further.
 import GraphSetupWindow from './sequences/GraphSetupWindow.jsx';
@@ -256,6 +256,8 @@ const buildRayModeData = ({ baseTriangle, rayStartVertex, rayAngle, maxBounces, 
   const T0 = baseTriangle.points;
   // Collect each reflected copy in ray-traversal order.
   const triangles = [];
+  // Track the physical edge index crossed at each bounce for sequence-code derivation.
+  const reflectionEdges = [];
   // Anchor the ray at the selected physical vertex.
   const O = { ...T0[rayStartVertex] };
   // Convert the displayed angle to radians for trigonometry.
@@ -347,6 +349,9 @@ const buildRayModeData = ({ baseTriangle, rayStartVertex, rayAngle, maxBounces, 
     // Insert the reflected opposite vertex into its original index.
     nextTri[(bestEdge + 2) % 3] = { ...newP3 };
 
+    // Record the crossed edge index for sequence-code derivation.
+    reflectionEdges.push(bestEdge);
+
     // Add the completed reflected triangle before evaluating the terminal hit.
     triangles.push({
       id: `Ray-T${i + 1}`,
@@ -366,9 +371,10 @@ const buildRayModeData = ({ baseTriangle, rayStartVertex, rayAngle, maxBounces, 
   // Use the viewport scale for a ray that has not yet intersected an edge.
   const finalT = currentRayT === 0 ? Math.max(svgSize.width, svgSize.height) / zoom : currentRayT;
 
-  // Return both the reflected chain and the visible ray segment.
+  // Return the reflected chain, edge sequence, and the visible ray segment.
   return {
     triangles,
+    reflectionEdges,
     rayLine: { x1: O.x, y1: O.y, x2: O.x + finalT * D.x, y2: O.y + finalT * D.y }
   };
 };
@@ -499,6 +505,73 @@ const getOtherVertexOnEdge = (edge, vertexIdx) => {
   if (firstVertexIdx === vertexIdx) return secondVertexIdx;
   if (secondVertexIdx === vertexIdx) return firstVertexIdx;
   return null;
+};
+
+/**
+ * Derives the billiard sequence code from a list of crossed edge indices.
+ *
+ * Uses the same initial state and fan-run convention as unfoldCodeData:
+ * previousEdge = 0 (AB), fanVertexIdx = 1 (B / symbol y). Each consecutive
+ * run of reflections about the same fan vertex produces one integer in the
+ * code; fan transitions happen when the crossed edge is no longer incident
+ * to the current fan vertex's expected next edge.
+ */
+const deriveSequenceCodeFromEdges = (reflectionEdges) => {
+  if (!reflectionEdges || reflectionEdges.length === 0) {
+    return { sequenceCode: '', parsedSequence: [] };
+  }
+
+  const { idxToAngle } = getCodeModeAngleMaps();
+  const parsedSequence = [];
+
+  // Same initial state as unfoldCodeData: start in the AB/BC wedge.
+  let previousEdge = 0;
+  let fanVertexIdx = 1;
+  let currentCount = 0;
+
+  for (let i = 0; i < reflectionEdges.length; i++) {
+    const edge = reflectionEdges[i];
+
+    // The expected next edge within this fan: the incident edge that is NOT previousEdge.
+    const incidentEdges = getEdgesForAngle(fanVertexIdx);
+    const expectedEdge = incidentEdges[0] === previousEdge ? incidentEdges[1] : incidentEdges[0];
+
+    if (edge === expectedEdge) {
+      // This edge continues the current fan run.
+      currentCount++;
+      previousEdge = edge;
+    } else {
+      // Close the current fan run (if any) and transition to a new fan center.
+      if (currentCount > 0) {
+        parsedSequence.push({ count: currentCount, angle: idxToAngle[fanVertexIdx] });
+      }
+
+      // Transition: the next fan center is the other endpoint of the last crossed edge.
+      fanVertexIdx = getOtherVertexOnEdge(previousEdge, fanVertexIdx);
+      if (fanVertexIdx === null) break;
+
+      // Check if this edge matches the new fan's expected first edge.
+      const newIncidentEdges = getEdgesForAngle(fanVertexIdx);
+      const newExpectedEdge = newIncidentEdges[0] === previousEdge ? newIncidentEdges[1] : newIncidentEdges[0];
+
+      if (edge === newExpectedEdge) {
+        currentCount = 1;
+        previousEdge = edge;
+      } else {
+        // The edge does not match any expected fan — stop gracefully.
+        break;
+      }
+    }
+  }
+
+  // Close the final fan run.
+  if (currentCount > 0) {
+    parsedSequence.push({ count: currentCount, angle: idxToAngle[fanVertexIdx] });
+  }
+
+  // Build the space-separated integer code string.
+  const sequenceCode = parsedSequence.map(s => s.count).join(' ');
+  return { sequenceCode, parsedSequence };
 };
 
 /** Parses and unfolds the integer code against a supplied base triangle. */
@@ -2508,7 +2581,8 @@ export default function App() {
 
   // --- RAY SIMULATOR SPECIFIC STATE ---
   // Physical vertex index used as the origin in direct ray mode.
-  const [rayStartVertex, setRayStartVertex] = useState(() => restoredWorkspace?.rayStartVertex ?? 0);
+  // Trace-ray mode always starts from vertex A (the origin), matching code mode's convention.
+  const [rayStartVertex] = useState(0);
   // Ray-mode angle is stored in degrees because that is what the UI exposes.
   const [rayAngle, setRayAngle] = useState(() => restoredWorkspace?.rayAngle ?? 60);
   // Base geometry angles for Trace Ray mode
@@ -2848,10 +2922,10 @@ export default function App() {
 
   const rayData = useMemo(() => {
     // In code mode, skip all ray calculations and expose a harmless empty result.
-    if (simulatorMode !== 'ray') return { triangles: [], rayLine: null };
+    if (simulatorMode !== 'ray') return { triangles: [], rayLine: null, reflectionEdges: [], sequenceCode: '', parsedSequence: [] };
 
     // Delegate the pure ray-unfolding calculation to the testable helper.
-    return buildRayModeData({
+    const data = buildRayModeData({
       baseTriangle,
       rayStartVertex,
       rayAngle,
@@ -2859,6 +2933,9 @@ export default function App() {
       svgSize,
       zoom
     });
+    // Derive the equivalent billiard sequence code from the crossed edges.
+    const { sequenceCode, parsedSequence } = deriveSequenceCodeFromEdges(data.reflectionEdges);
+    return { ...data, sequenceCode, parsedSequence };
   }, [simulatorMode, baseTriangle, rayStartVertex, rayAngle, maxBounces, svgSize, zoom]);
 
 
@@ -3913,26 +3990,12 @@ export default function App() {
 
           {/* SIMULATOR PARAMETERS */}
           {simulatorMode === 'ray' ? (
+            <>
             <div className="p-4 bg-[#151c24] m-3 rounded-lg shadow-[0_8px_28px_rgba(0,0,0,0.28)] border border-white/10">
               <h2 className="text-xs uppercase tracking-wider font-bold text-amber-200 mb-4 flex items-center gap-1.5">
                 <Zap className="w-3.5 h-3.5" /> Simulation Rules
               </h2>
               <div className="space-y-4">
-                <div>
-                  <label className="text-[11px] font-bold text-slate-400 flex justify-between mb-1.5"><span>Origin Vertex</span></label>
-                  <div className="flex gap-2">
-                    {[0, 1, 2].map(v => (
-                      <button
-                        key={v}
-                        onClick={() => setRayStartVertex(v)}
-                        title={`Start the ray at vertex ${['A', 'B', 'C'][v]}.`}
-                        className={`flex-1 py-1.5 text-xs rounded-md font-bold border transition-colors ${rayStartVertex === v ? 'bg-amber-300/15 border-amber-300/40 text-amber-100' : 'bg-[#0b1016] border-white/10 text-slate-500 hover:text-slate-200 hover:border-slate-500/50'}`}
-                      >
-                        Start {['A', 'B', 'C'][v]}
-                      </button>
-                    ))}
-                  </div>
-                </div>
                 <div>
                   <label className="text-[11px] font-bold text-slate-400 flex justify-between mb-1.5"><span>Trajectory Angle</span></label>
                   <div className="flex gap-3 items-center">
@@ -3949,6 +4012,42 @@ export default function App() {
                 </div>
               </div>
             </div>
+
+            {/* GENERATED SEQUENCE CODE (Ray Mode Only) */}
+            {rayData.reflectionEdges.length > 0 && (
+              <div className="mb-3 bg-[#151c24] p-4 mx-3 rounded-lg border border-white/10 shadow-[0_8px_28px_rgba(0,0,0,0.22)]">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-[10px] uppercase tracking-wider font-bold text-amber-200 flex items-center gap-1.5">
+                    <Code2 className="w-3 h-3" /> Generated Sequence Code
+                  </h3>
+                  <button
+                    onClick={() => navigator.clipboard.writeText(rayData.sequenceCode)}
+                    title="Copy sequence code to clipboard"
+                    className="text-[10px] font-bold text-slate-500 hover:text-amber-200 transition-colors flex items-center gap-1"
+                  >
+                    <Copy className="w-3 h-3" /> Copy
+                  </button>
+                </div>
+                <div className="bg-[#0b1016] p-2.5 rounded-md border border-white/10 font-mono text-sm text-slate-100 break-words leading-relaxed shadow-inner select-all">
+                  {rayData.sequenceCode || '(no valid code)'}
+                </div>
+                {rayData.parsedSequence.length > 0 && (
+                  <>
+                    <h3 className="text-[10px] uppercase tracking-wider font-bold text-slate-400 mt-4 mb-2 flex items-center gap-1.5">
+                      <ChevronRight className="w-3 h-3" /> Unfolded Sequence
+                    </h3>
+                    <div className="bg-[#0b1016] p-2 rounded-md border border-white/10 max-h-24 overflow-y-auto flex flex-wrap gap-1.5 custom-scrollbar shadow-inner">
+                      {rayData.parsedSequence.map((step, idx) => (
+                        <span key={idx} className="bg-[#17212b] text-slate-200 text-[10px] font-mono px-1.5 py-0.5 rounded border border-white/10 shadow-sm flex items-center">
+                          {step.count}<span className="text-amber-300 font-bold ml-0.5">{step.angle}</span>
+                        </span>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+            </>
           ) : (
             <div className="p-4 bg-[#151c24] m-3 rounded-lg shadow-[0_8px_28px_rgba(0,0,0,0.28)] border border-white/10">
               <div className="flex items-center justify-between mb-2">
