@@ -283,31 +283,26 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ series, currentPoint
   const toDataB = useCallback((y) => pan.b - (y - size.height / 2) / zoom, [size.height, pan.b, zoom]);
 
   // Imperative view controls used by AnglePlotWindow's Zoom In / Zoom Out /
-  // Fit / Reset View buttons. Locking the view (the "Fix" button) disables
-  // all four here too, as a second line of defense beyond the toolbar
-  // buttons themselves being disabled while locked.
+  // Fit / Reset View buttons. Lock View only blocks interactive mouse wheel /
+  // drag panning, while explicit toolbar buttons remain functional.
   useImperativeHandle(ref, () => ({
     zoomIn: () => {
-      if (isLocked) return;
       const nextZoom = clampZoom(zoom * WHEEL_ZOOM_FACTOR);
       setZoom(nextZoom);
       setPan((prevPan) => clampPanToDomain(prevPan, nextZoom, size.width, size.height));
     },
     zoomOut: () => {
-      if (isLocked) return;
       const nextZoom = clampZoom(zoom / WHEEL_ZOOM_FACTOR);
       setZoom(nextZoom);
       setPan((prevPan) => clampPanToDomain(prevPan, nextZoom, size.width, size.height));
     },
     fitToPoints: () => {
-      if (isLocked) return;
       // Empty-graph state: nothing visible to fit to, fall back to the default overview instead of erroring.
       const fit = computeFitView(allPoints, currentPoint, size.width, size.height, maxZoom);
       setZoom(fit.zoom);
       setPan(clampPanToDomain(fit.pan, fit.zoom, size.width, size.height));
     },
     resetToDefaultView: () => {
-      if (isLocked) return;
       setZoom(DEFAULT_ZOOM);
       setPan(clampPanToDomain(DEFAULT_PAN, DEFAULT_ZOOM, size.width, size.height));
     },
@@ -320,7 +315,7 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ series, currentPoint
       minB: toDataB(size.height),
       maxB: toDataB(0),
     }),
-  }), [isLocked, allPoints, currentPoint, size, maxZoom, clampZoom, zoom, toDataA, toDataB]);
+  }), [allPoints, currentPoint, size, maxZoom, clampZoom, zoom, toDataA, toDataB]);
 
   // Report every zoom/pan/size change (including the very first one, once
   // the real measured canvas size is known) so AnglePlotWindow can debounce
@@ -354,7 +349,7 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ series, currentPoint
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const renderStartedAt = import.meta.env.DEV ? performance.now() : 0;
+    const renderStartedAt = import.meta.env?.DEV ? performance.now() : 0;
     const dpr = window.devicePixelRatio || 1;
     canvas.width = size.width * dpr;
     canvas.height = size.height * dpr;
@@ -566,7 +561,7 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ series, currentPoint
     // pass (never one shape per point/graph — see the module comment on
     // OCCUPANCY/DENSE/POINTS mode), so "Renderer update" below covers every
     // currently-visible graph in a single paint, not one specific graph.
-    if (import.meta.env.DEV) {
+    if (import.meta.env?.DEV) {
       const renderMs = performance.now() - renderStartedAt;
       const totalPoints = series.reduce((sum, s) => sum + s.points.length, 0);
       console.log(`[AnglePlotPanel] Renderer update: ${renderMs.toFixed(1)}ms | visible series: ${series.length} | total points drawn: ${totalPoints}`);
