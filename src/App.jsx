@@ -1,7 +1,7 @@
 // React supplies state, refs, effects, and memoization for this client-only tool.
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 // Lucide supplies recognizable control/status icons without custom SVG code.
-import { Maximize, RotateCcw, Zap, Settings2, List, Code2, Compass, ChevronRight, ChevronLeft, Activity, CheckCircle2, XCircle, ShieldCheck, Eye, EyeOff, Search, AlertTriangle, Sun, Moon, ZoomIn, ZoomOut, Lock, Unlock, ScatterChart, Plus, Loader2, Trash2, Library, Database } from 'lucide-react';
+import { Maximize, RotateCcw, Zap, Settings2, List, Code2, Compass, ChevronRight, ChevronLeft, Activity, CheckCircle2, XCircle, ShieldCheck, Eye, EyeOff, Search, AlertTriangle, Sun, Moon, ZoomIn, ZoomOut, Lock, Unlock, ScatterChart, Plus, Loader2, Trash2, Library, Database, Save } from 'lucide-react';
 // The angle-region plot pop-up lives in its own module (see src/anglePlot) so
 // it can be unit-tested without React and does not bloat this file further.
 import GraphSetupWindow from './sequences/GraphSetupWindow.jsx';
@@ -2617,6 +2617,17 @@ export default function App() {
   // favorite/tags/notes only make sense for this single-user local library,
   // not the multi-user shared one).
   const [isGraphDatabaseOpen, setIsGraphDatabaseOpen] = useState(false);
+  // Row ids currently mid-way through an explicit "Save Graph" click (see
+  // handleSaveGraphNow) — drives that row's own button showing "Saving…"
+  // and being disabled. Never persisted: a save either finishes or fails
+  // within seconds, so there's nothing meaningful to restore across a reload.
+  const [savingGraphIds, setSavingGraphIds] = useState(() => new Set());
+  // A small, transient success/failure banner for "Save Graph" — this app
+  // has no existing toast system to reuse, so this is the one new small
+  // piece of UI state the button needs. Auto-dismisses itself; see
+  // showSaveToast/saveToastTimeoutRef below.
+  const [saveToast, setSaveToast] = useState(null); // { message, isError } | null
+  const saveToastTimeoutRef = useRef(null);
   // Bumped on every "Plot Valid Angle Region" click so an already-open window
   // regenerates and comes to the front instead of a duplicate window opening.
   // Per-row plot lifecycle, mirrored out of AnglePlotWindow (the only place
@@ -3431,6 +3442,58 @@ export default function App() {
     if (closePanel) setIsGraphDatabaseOpen(false);
   };
 
+  // Shows a small, self-dismissing banner for the "Save Graph" button's
+  // own success/failure result — see saveToast's own declaration comment
+  // for why this exists (no pre-existing toast system to reuse).
+  const showSaveToast = (message, isError = false) => {
+    if (saveToastTimeoutRef.current) clearTimeout(saveToastTimeoutRef.current);
+    setSaveToast({ message, isError });
+    saveToastTimeoutRef.current = setTimeout(() => setSaveToast(null), 3000);
+  };
+  useEffect(() => () => {
+    if (saveToastTimeoutRef.current) clearTimeout(saveToastTimeoutRef.current);
+  }, []);
+
+  // The explicit "Save Graph" button, next to "Plot Valid Angle Region" on
+  // each row's own card: persists THIS row's already-computed points to
+  // the shared GraphDatabase (GitHub-backed on the deployed site, local
+  // disk in local dev — see server/graphDatabase/graphDatabase.js's own
+  // resolveDefaultGraphDatabase) right now, on demand, rather than waiting
+  // for the automatic save AnglePlotWindow.jsx's own background-exact-
+  // complete handler already performs once a row's brute-force sweep
+  // finishes uninterrupted. Deliberately calls that EXACT SAME
+  // saveLocalExactGraph function (never a second save pathway) with the
+  // row's own current points/renderInfo, already sitting in
+  // plotStatusById — mirrored out of AnglePlotWindow's own results state
+  // by its onRowStatusChange callback — so this never touches, re-runs, or
+  // waits on any plotting/generation logic of its own; it only ever
+  // persists a result that's already on screen.
+  //
+  // Requires graphStatus === EXACT, not just status === 'done': a row can
+  // be "done" from the fast adaptive preview alone, well before its
+  // background brute-force sweep finishes — saving THAT into the
+  // permanent library would store an incomplete geometry under a hash
+  // nothing could ever correct later, exactly the failure mode the
+  // automatic save already guards against (see AnglePlotWindow.jsx's own
+  // `!bgTimeLimited` check). This button enforces the identical rule.
+  const handleSaveGraphNow = async (row) => {
+    const plotInfo = plotStatusById[row.id];
+    if (!plotInfo || plotInfo.renderInfo?.graphStatus !== GRAPH_STATUS.EXACT || !plotInfo.points?.length) return;
+    setSavingGraphIds(prev => new Set(prev).add(row.id));
+    const ok = await saveLocalExactGraph(
+      graphParamsFromSequence(row, baseTriangleLength),
+      GRAPH_HASH_ALGORITHM_VERSION,
+      plotInfo.points,
+      plotInfo.renderInfo?.durationMs ?? null,
+      { title: row.title, graphColorHex: row.color, notes: row.notes, tags: row.tags, favorite: row.favorite, visibility: row.visibility },
+    );
+    setSavingGraphIds(prev => { const next = new Set(prev); next.delete(row.id); return next; });
+    showSaveToast(
+      ok ? '✓ Graph saved successfully.' : `Couldn't save ${row.label} — the graph database may be unavailable right now.`,
+      !ok,
+    );
+  };
+
   // --- SEQUENCE ROW LIST HANDLERS ---
   // "+ Add Sequence": appends a new, empty, visible row and makes it active
   // (matches "click a row to edit it" — a freshly added row is the one the
@@ -3999,6 +4062,12 @@ export default function App() {
                   // pending draft — angles, step, and code together — before
                   // plotting.
                   const canPlotNow = !anglesIncomplete && !!row.draftSequenceText.trim() && !isPlotting;
+                  // "Save Graph" needs the row's *exact* (brute-force-complete)
+                  // geometry, not just any "done" status — see
+                  // handleSaveGraphNow's own comment on why an adaptive-only
+                  // preview must never be persisted as if it were permanent.
+                  const isExactlyPlotted = plotInfo?.renderInfo?.graphStatus === GRAPH_STATUS.EXACT;
+                  const canSaveGraphNow = isExactlyPlotted && !!plotInfo?.points?.length && !savingGraphIds.has(row.id);
                   return (
                     <div
                       key={row.id}
@@ -4185,6 +4254,36 @@ export default function App() {
                         {isPlotting ? <Loader2 className="w-3 h-3 animate-spin" /> : <ScatterChart className="w-3 h-3" />}
                         {isPlotting ? 'Calculating…' : 'Plot Valid Angle Region'}
                       </button>
+                      {/* "Save Graph": persists this row's already-plotted
+                          points to the shared GraphDatabase right now (see
+                          handleSaveGraphNow — reuses the exact same
+                          saveLocalExactGraph call the automatic
+                          background-exact save already makes). "Open Graph
+                          Database": the same browser the sidebar's own
+                          "Graph Database" button opens (see
+                          setIsGraphDatabaseOpen below), placed here too so
+                          saving and browsing the result are one click apart. */}
+                      <div className="flex items-center gap-1.5 mt-1.5">
+                        <button
+                          type="button"
+                          onClick={e => { e.stopPropagation(); handleSaveGraphNow(row); }}
+                          disabled={!canSaveGraphNow}
+                          title={canSaveGraphNow ? `Save ${row.label} to the Graph Database now` : `Plot ${row.label} and wait for its exact computation to finish before it can be saved`}
+                          className="flex-1 flex items-center justify-center gap-1.5 bg-emerald-500/15 hover:bg-emerald-500/25 disabled:opacity-40 disabled:cursor-not-allowed border border-emerald-300/30 text-emerald-100 px-2.5 py-1 rounded-md text-[10px] font-bold transition-colors"
+                        >
+                          {savingGraphIds.has(row.id) ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+                          {savingGraphIds.has(row.id) ? 'Saving…' : 'Save Graph'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={e => { e.stopPropagation(); setIsGraphDatabaseOpen(true); }}
+                          title="Open the Graph Database browser"
+                          className="flex-1 flex items-center justify-center gap-1.5 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-200 px-2.5 py-1 rounded-md text-[10px] font-bold transition-colors"
+                        >
+                          <Database className="w-3 h-3" />
+                          Open Graph Database
+                        </button>
+                      </div>
                       <div className="flex items-center justify-between gap-1.5 mt-1">
                         <span className={`text-[9px] font-bold ${plotPhaseColor}`}>{plotPhase}</span>
                         {plotPhase === 'Plotted' && Number.isFinite(plotInfo?.renderInfo?.durationMs) && (
@@ -4910,6 +5009,25 @@ export default function App() {
           onClose={() => setIsGraphDatabaseOpen(false)}
           onLoadGraph={handleLoadGraphFromDatabase}
         />
+      )}
+
+      {/* "Save Graph" result banner — self-dismissing (see showSaveToast),
+          no app-provided toast system existed to reuse. High z-index so it
+          stays visible even over the Graph Database browser (z-[83]),
+          since saving and then immediately opening that browser is exactly
+          the flow the buttons beside each other are meant to support. */}
+      {saveToast && (
+        <div
+          role="status"
+          aria-live="polite"
+          className={`fixed bottom-4 right-4 z-[95] flex items-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-bold shadow-[0_12px_40px_rgba(0,0,0,0.5)] ${
+            saveToast.isError
+              ? 'border-red-400/40 bg-red-500/20 text-red-100'
+              : 'border-emerald-400/40 bg-emerald-500/20 text-emerald-100'
+          }`}
+        >
+          {saveToast.message}
+        </div>
       )}
 
       {/* Plain-English error pop-up for a rejected sequence/angle apply

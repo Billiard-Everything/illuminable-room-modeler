@@ -64,7 +64,13 @@ export const fetchLocalExactGraph = async (hash, { timeoutMs = DEFAULT_TIMEOUT_M
  *   the row's own richer metadata (sequenceGraphConfig.js's createSequenceRow),
  *   threaded straight through to graphDatabase.js's saveGraph — see that
  *   module's own buildMetadata for how each is preserved/defaulted server-side.
- * @returns {Promise<void>} never rejects; failures are logged, not thrown.
+ * @returns {Promise<boolean>} never rejects; failures are logged, not
+ *   thrown. Returns whether the save actually succeeded — the automatic
+ *   background-exact call site (AnglePlotWindow.jsx) still ignores this
+ *   (fire-and-forget, by design: a failed automatic save must never
+ *   disrupt plotting), but an explicit, user-initiated "Save Graph"
+ *   button needs to know whether to report success or failure back to
+ *   the person who clicked it.
  */
 export const saveLocalExactGraph = async (params, algorithmVersion, points, durationMs, {
   timeoutMs = DEFAULT_TIMEOUT_MS, title, graphColorHex, notes, tags, favorite, visibility,
@@ -77,11 +83,13 @@ export const saveLocalExactGraph = async (params, algorithmVersion, points, dura
     }, timeoutMs);
     if (!res.ok) {
       devWarn(`Renderer: local GraphDatabase save returned ${res.status}, exact graph stays uncached locally for now`);
-      return;
+      return false;
     }
     devLog('Renderer: Saved exact graph to the local file-based GraphDatabase');
+    return true;
   } catch (err) {
     devWarn('Renderer: local GraphDatabase save unavailable, exact graph stays uncached locally for now', err);
+    return false;
   }
 };
 
