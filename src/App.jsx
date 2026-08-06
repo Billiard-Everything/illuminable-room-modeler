@@ -2353,45 +2353,33 @@ const GraphSimulatorView = ({
     <div className="flex flex-col h-full w-full overflow-hidden select-none bg-[#070b10]">
       {/* Controls */}
       <div className="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-white/10 shrink-0">
-        <button
-          type="button"
-          onClick={runGeneration}
-          title="Immediately regenerate every visible sequence using the current view and its own Angle Step, without waiting for the debounce delay."
-          className="flex items-center gap-1.5 bg-[#101820]/95 hover:bg-[#172230] disabled:opacity-50 text-slate-200 px-2.5 py-1.5 rounded-md text-[11px] font-bold"
-        >
-          {calculatingCount > 0 ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-          Generate/Refresh Plot
-        </button>
         <div className="flex bg-[#101820]/95 rounded-md border border-white/10 overflow-hidden">
-          <button type="button" onClick={() => panelRef.current?.zoomIn()} disabled={isViewLocked} className="px-2.5 py-2 hover:bg-[#172230] text-slate-300 disabled:opacity-40 border-r border-white/10 transition-colors flex items-center gap-1.5" title="Zoom In">
+          <button type="button" onClick={() => panelRef.current?.zoomIn()} className="px-2.5 py-2 hover:bg-[#172230] text-slate-300 hover:text-cyan-200 border-r border-white/10 transition-colors flex items-center gap-1.5" title="Zoom In">
             <ZoomIn className="w-3.5 h-3.5" />
             <span className="text-[10px] font-bold">Zoom In</span>
           </button>
-          <button type="button" onClick={() => panelRef.current?.zoomOut()} disabled={isViewLocked} className="px-2.5 py-2 hover:bg-[#172230] text-slate-300 disabled:opacity-40 border-r border-white/10 transition-colors flex items-center gap-1.5" title="Zoom Out">
+          <button type="button" onClick={() => panelRef.current?.zoomOut()} className="px-2.5 py-2 hover:bg-[#172230] text-slate-300 hover:text-cyan-200 border-r border-white/10 transition-colors flex items-center gap-1.5" title="Zoom Out">
             <ZoomOut className="w-3.5 h-3.5" />
             <span className="text-[10px] font-bold">Zoom Out</span>
           </button>
-          <button type="button" onClick={() => panelRef.current?.fitToPoints()} disabled={isViewLocked} className="px-2.5 py-2 hover:bg-[#172230] text-slate-300 disabled:opacity-40 border-r border-white/10 transition-colors flex items-center gap-1.5" title="Fit View">
+          <button type="button" onClick={() => panelRef.current?.fitToPoints()} className="px-2.5 py-2 hover:bg-[#172230] text-slate-300 hover:text-cyan-200 border-r border-white/10 transition-colors flex items-center gap-1.5" title="Fit View">
             <Maximize className="w-3.5 h-3.5" />
             <span className="text-[10px] font-bold">Fit View</span>
           </button>
-          <button type="button" onClick={() => panelRef.current?.resetToDefaultView()} disabled={isViewLocked} className="px-2.5 py-2 hover:bg-[#172230] text-slate-300 disabled:opacity-40 border-r border-white/10 transition-colors flex items-center gap-1.5" title="Reset View">
+          <button type="button" onClick={() => panelRef.current?.resetToDefaultView()} className="px-2.5 py-2 hover:bg-[#172230] text-slate-300 hover:text-cyan-200 border-r border-white/10 transition-colors flex items-center gap-1.5" title="Reset View">
             <RotateCcw className="w-3.5 h-3.5" />
             <span className="text-[10px] font-bold">Reset</span>
           </button>
           <button
             type="button"
             onClick={() => setIsViewLocked((locked) => !locked)}
-            className={`px-2.5 py-2 transition-colors flex items-center gap-1.5 ${isViewLocked ? 'bg-cyan-500/20 text-cyan-200' : 'hover:bg-[#172230] text-slate-300'}`}
+            className={`px-2.5 py-2 transition-colors flex items-center gap-1.5 ${isViewLocked ? 'bg-cyan-500/20 text-cyan-200' : 'hover:bg-[#172230] text-slate-300 hover:text-cyan-200'}`}
             title={isViewLocked ? 'Unlock View' : 'Lock View'}
           >
             {isViewLocked ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
             <span className="text-[10px] font-bold">{isViewLocked ? 'Unlock View' : 'Lock View'}</span>
           </button>
         </div>
-        <button type="button" onClick={onEditGraphs} title="Open Graph Setup to configure every graph's angles, step, code, color, and visibility." className={viewButtonClass}>
-          Edit Graphs
-        </button>
       </div>
 
       {/* Status */}
@@ -3321,8 +3309,16 @@ export default function App() {
   };
 
   const handleOpenPlotFromGraphSetup = () => {
+    sequences.forEach((row) => {
+      applyAngleDrafts(row.id);
+      applyAngleStepDraft(row.id);
+      handleApplySequenceDraft(row.id);
+    });
     setIsGraphSetupOpen(false);
     handleOpenAnglePlot();
+    if (activeSequenceId) {
+      setForceGenerateRequest({ id: activeSequenceId, token: ++forceGenerateTokenRef.current });
+    }
   };
 
   // Graph Library's "Load Graph" button (see GraphLibraryPanel.jsx and
@@ -3710,9 +3706,9 @@ export default function App() {
           <div className="flex items-start justify-between gap-3 mb-5">
             <div className="min-w-0">
               <h1 className="text-xl font-bold text-slate-100 tracking-tight flex items-center gap-2 mb-1">
-                <Activity className="w-5 h-5 text-cyan-300" /> Unfolding Viewer
+                <Activity className="w-5 h-5 text-cyan-300" /> illuminable-room-modeler
               </h1>
-              <p className="text-[11px] font-medium text-slate-500 uppercase tracking-widest">Invisible Point Workbench</p>
+              <p className="text-[11px] font-medium text-slate-500 uppercase tracking-widest">illuminable-room-modeler</p>
             </div>
             <div className="flex shrink-0 gap-2">
               <button

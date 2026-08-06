@@ -283,31 +283,26 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ series, currentPoint
   const toDataB = useCallback((y) => pan.b - (y - size.height / 2) / zoom, [size.height, pan.b, zoom]);
 
   // Imperative view controls used by AnglePlotWindow's Zoom In / Zoom Out /
-  // Fit / Reset View buttons. Locking the view (the "Fix" button) disables
-  // all four here too, as a second line of defense beyond the toolbar
-  // buttons themselves being disabled while locked.
+  // Fit / Reset View buttons. Lock View only blocks interactive mouse wheel /
+  // drag panning, while explicit toolbar buttons remain functional.
   useImperativeHandle(ref, () => ({
     zoomIn: () => {
-      if (isLocked) return;
       const nextZoom = clampZoom(zoom * WHEEL_ZOOM_FACTOR);
       setZoom(nextZoom);
       setPan((prevPan) => clampPanToDomain(prevPan, nextZoom, size.width, size.height));
     },
     zoomOut: () => {
-      if (isLocked) return;
       const nextZoom = clampZoom(zoom / WHEEL_ZOOM_FACTOR);
       setZoom(nextZoom);
       setPan((prevPan) => clampPanToDomain(prevPan, nextZoom, size.width, size.height));
     },
     fitToPoints: () => {
-      if (isLocked) return;
       // Empty-graph state: nothing visible to fit to, fall back to the default overview instead of erroring.
       const fit = computeFitView(allPoints, currentPoint, size.width, size.height, maxZoom);
       setZoom(fit.zoom);
       setPan(clampPanToDomain(fit.pan, fit.zoom, size.width, size.height));
     },
     resetToDefaultView: () => {
-      if (isLocked) return;
       setZoom(DEFAULT_ZOOM);
       setPan(clampPanToDomain(DEFAULT_PAN, DEFAULT_ZOOM, size.width, size.height));
     },

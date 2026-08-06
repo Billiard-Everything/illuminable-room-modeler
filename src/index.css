@@ -264,6 +264,23 @@ button {
   color: #92400e;
 }
 
+.app-theme-light .text-amber-300,
+.app-theme-light .text-amber-400 {
+  color: #b45309;
+}
+
+.app-theme-light [class~="border-amber-500/30"] {
+  border-color: rgba(217, 119, 6, 0.35);
+}
+
+.app-theme-light [class~="border-red-500/30"] {
+  border-color: rgba(220, 38, 38, 0.35);
+}
+
+.app-theme-light [class~="bg-red-500/10"] {
+  background-color: rgba(239, 68, 68, 0.12);
+}
+
 .app-theme-light .text-emerald-100,
 .app-theme-light .text-emerald-300 {
   color: #047857;
