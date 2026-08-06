@@ -1750,7 +1750,7 @@ const GraphSimulatorView = ({
     if (!unsubscribe) return;
     const wasRunning = previousHash ? isExactComputationRunning(previousHash) : false;
     unsubscribe();
-    if (import.meta.env.DEV && wasRunning && previousHash && !isExactComputationRunning(previousHash)) {
+    if (import.meta.env?.DEV && wasRunning && previousHash && !isExactComputationRunning(previousHash)) {
       console.log(`Renderer: Background Exact cancelled (superseded) — ${label}`);
     }
   }, []);
@@ -1897,7 +1897,7 @@ const GraphSimulatorView = ({
     // adaptive preview, no background job, no further cache writes.
     const cachedExact = graphCache.get(exactHash);
     if (cachedExact) {
-      if (import.meta.env.DEV) console.log(`Renderer: Cache Hit (exact) — ${seq.label} (${cachedExact.renderInfo.pointCount} points reused)`);
+      if (import.meta.env?.DEV) console.log(`Renderer: Cache Hit (exact) — ${seq.label} (${cachedExact.renderInfo.pointCount} points reused)`);
       setRowResult(seq.id, { points: cachedExact.points, status: 'done', renderInfo: { ...cachedExact.renderInfo, fromCache: true } });
       finishSlot();
       return;
@@ -1935,7 +1935,7 @@ const GraphSimulatorView = ({
         // ever-diverging call sites (or, now, which store) populated it.
         const renderInfo = primeExactGraphCache(exactHash, seq.angleStepInput, cacheHit);
         const source = localResult ? 'local GraphDatabase' : 'PostgreSQL';
-        if (import.meta.env.DEV) console.log(`Renderer: Cache Hit (${source}) — ${seq.label} (${cacheHit.points.length} points reused)`);
+        if (import.meta.env?.DEV) console.log(`Renderer: Cache Hit (${source}) — ${seq.label} (${cacheHit.points.length} points reused)`);
         setRowResult(seq.id, { points: cacheHit.points, status: 'done', renderInfo: { ...renderInfo, fromCache: true } });
         finishSlot();
         return;
@@ -2002,7 +2002,7 @@ const GraphSimulatorView = ({
         }),
         (points, error) => {
           if (error) {
-            if (import.meta.env.DEV) console.warn(`Renderer: Background Exact failed — ${seq.label}`, error);
+            if (import.meta.env?.DEV) console.warn(`Renderer: Background Exact failed — ${seq.label}`, error);
             return;
           }
           const renderInfo = {
@@ -2021,7 +2021,7 @@ const GraphSimulatorView = ({
           // *different* still-live row shares this exact hash — either way
           // the cache write below is safe and useful.
           graphCache.set(exactHash, { points, renderInfo });
-          if (import.meta.env.DEV) console.log(`Renderer: Background Exact complete — ${seq.label} (${points.length} points, ${renderInfo.durationMs.toFixed(0)}ms)`);
+          if (import.meta.env?.DEV) console.log(`Renderer: Background Exact complete — ${seq.label} (${points.length} points, ${renderInfo.durationMs.toFixed(0)}ms)`);
           // Save to the permanent local GraphDatabase AND upload to the
           // shared PostgreSQL library — but only once per hash per session
           // (uploadAttemptedHashesRef; a hash shared by several rows would
@@ -2077,7 +2077,7 @@ const GraphSimulatorView = ({
       );
       backgroundUnsubscribersRef.current[seq.id] = unsubscribe;
       backgroundJobHashRef.current[seq.id] = exactHash;
-      if (import.meta.env.DEV) {
+      if (import.meta.env?.DEV) {
         // getBackgroundJobState is read *after* requestExactComputation, so
         // it reflects whatever the queue actually did with this request —
         // 'running' if a slot was free, 'queued' if both were already busy
@@ -2099,13 +2099,13 @@ const GraphSimulatorView = ({
     });
     const cachedPreview = graphCache.get(previewCacheKey);
     if (cachedPreview) {
-      if (import.meta.env.DEV) console.log(`Renderer: Cache Hit (preview) — ${seq.label} (${cachedPreview.renderInfo.pointCount} points reused)`);
+      if (import.meta.env?.DEV) console.log(`Renderer: Cache Hit (preview) — ${seq.label} (${cachedPreview.renderInfo.pointCount} points reused)`);
       setRowResult(seq.id, { points: cachedPreview.points, status: 'done', renderInfo: { ...cachedPreview.renderInfo, fromCache: true } });
       finishSlot();
       startBackgroundExact();
       return;
     }
-    if (import.meta.env.DEV) console.log(`Renderer: Adaptive — ${seq.label}`);
+    if (import.meta.env?.DEV) console.log(`Renderer: Adaptive — ${seq.label}`);
 
     const task = generateVisibleAnglePoints({
       validateCandidate, baseLength, scale: parsed.scale, stepUnits: parsed.stepUnits,
@@ -2363,25 +2363,30 @@ const GraphSimulatorView = ({
           Generate/Refresh Plot
         </button>
         <div className="flex bg-[#101820]/95 rounded-md border border-white/10 overflow-hidden">
-          <button type="button" onClick={() => panelRef.current?.zoomIn()} disabled={isViewLocked} className="p-2 hover:bg-[#172230] text-slate-300 disabled:opacity-40 border-r border-white/10 transition-colors" title="Zoom In">
-            <ZoomIn className="w-4 h-4" />
+          <button type="button" onClick={() => panelRef.current?.zoomIn()} disabled={isViewLocked} className="px-2.5 py-2 hover:bg-[#172230] text-slate-300 disabled:opacity-40 border-r border-white/10 transition-colors flex items-center gap-1.5" title="Zoom In">
+            <ZoomIn className="w-3.5 h-3.5" />
+            <span className="text-[10px] font-bold">Zoom In</span>
           </button>
-          <button type="button" onClick={() => panelRef.current?.zoomOut()} disabled={isViewLocked} className="p-2 hover:bg-[#172230] text-slate-300 disabled:opacity-40 border-r border-white/10 transition-colors" title="Zoom Out">
-            <ZoomOut className="w-4 h-4" />
+          <button type="button" onClick={() => panelRef.current?.zoomOut()} disabled={isViewLocked} className="px-2.5 py-2 hover:bg-[#172230] text-slate-300 disabled:opacity-40 border-r border-white/10 transition-colors flex items-center gap-1.5" title="Zoom Out">
+            <ZoomOut className="w-3.5 h-3.5" />
+            <span className="text-[10px] font-bold">Zoom Out</span>
           </button>
-          <button type="button" onClick={() => panelRef.current?.fitToPoints()} disabled={isViewLocked} className="p-2 hover:bg-[#172230] text-slate-300 disabled:opacity-40 border-r border-white/10 transition-colors" title="Fit View">
-            <Maximize className="w-4 h-4" />
+          <button type="button" onClick={() => panelRef.current?.fitToPoints()} disabled={isViewLocked} className="px-2.5 py-2 hover:bg-[#172230] text-slate-300 disabled:opacity-40 border-r border-white/10 transition-colors flex items-center gap-1.5" title="Fit View">
+            <Maximize className="w-3.5 h-3.5" />
+            <span className="text-[10px] font-bold">Fit View</span>
           </button>
-          <button type="button" onClick={() => panelRef.current?.resetToDefaultView()} disabled={isViewLocked} className="p-2 hover:bg-[#172230] text-slate-300 disabled:opacity-40 border-r border-white/10 transition-colors" title="Reset View">
-            <RotateCcw className="w-4 h-4" />
+          <button type="button" onClick={() => panelRef.current?.resetToDefaultView()} disabled={isViewLocked} className="px-2.5 py-2 hover:bg-[#172230] text-slate-300 disabled:opacity-40 border-r border-white/10 transition-colors flex items-center gap-1.5" title="Reset View">
+            <RotateCcw className="w-3.5 h-3.5" />
+            <span className="text-[10px] font-bold">Reset</span>
           </button>
           <button
             type="button"
             onClick={() => setIsViewLocked((locked) => !locked)}
-            className={`p-2 transition-colors ${isViewLocked ? 'bg-cyan-500/20 text-cyan-200' : 'hover:bg-[#172230] text-slate-300'}`}
+            className={`px-2.5 py-2 transition-colors flex items-center gap-1.5 ${isViewLocked ? 'bg-cyan-500/20 text-cyan-200' : 'hover:bg-[#172230] text-slate-300'}`}
             title={isViewLocked ? 'Unlock View' : 'Lock View'}
           >
-            {isViewLocked ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}
+            {isViewLocked ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
+            <span className="text-[10px] font-bold">{isViewLocked ? 'Unlock View' : 'Lock View'}</span>
           </button>
         </div>
         <button type="button" onClick={onEditGraphs} title="Open Graph Setup to configure every graph's angles, step, code, color, and visibility." className={viewButtonClass}>
@@ -2735,7 +2740,9 @@ export default function App() {
       // Browser layout is authoritative for the final canvas dimensions.
       const { width, height } = el.getBoundingClientRect();
       // Store dimensions in React state so grid and transforms recompute.
-      setSvgSize({ width, height });
+      if (width > 0 && height > 0) {
+        setSvgSize({ width, height });
+      }
     };
     // Measure immediately, then on every subsequent size change.
     measure();
@@ -3735,14 +3742,14 @@ export default function App() {
             <button
               onClick={() => setSimulatorMode('ray')}
               title="Shoot one ray from a selected vertex."
-              className={`rounded-md px-3 py-2 text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${simulatorMode === 'ray' ? 'bg-amber-300/15 text-amber-100 shadow-sm' : 'text-slate-500 hover:text-slate-200 hover:bg-white/5'}`}
+              className={`rounded-md px-2 py-1.5 text-xs font-semibold transition-all flex items-center justify-center gap-1 whitespace-nowrap ${simulatorMode === 'ray' ? 'bg-amber-300/15 text-amber-100 shadow-sm' : 'text-slate-500 hover:text-slate-200 hover:bg-white/5'}`}
             >
               <Zap className="w-4 h-4"/> Trace Ray
             </button>
             <button 
               onClick={() => setSimulatorMode('code')}
               title="Unfold a space-separated integer code."
-              className={`rounded-md px-3 py-2 text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${simulatorMode === 'code' ? 'bg-cyan-300/15 text-cyan-100 shadow-sm' : 'text-slate-500 hover:text-slate-200 hover:bg-white/5'}`}
+              className={`rounded-md px-2 py-1.5 text-xs font-semibold transition-all flex items-center justify-center gap-1 whitespace-nowrap ${simulatorMode === 'code' ? 'bg-cyan-300/15 text-cyan-100 shadow-sm' : 'text-slate-500 hover:text-slate-200 hover:bg-white/5'}`}
             >
               <Code2 className="w-4 h-4"/> Unfold Code
             </button>
@@ -3750,7 +3757,7 @@ export default function App() {
             <button 
               onClick={() => setSimulatorMode('graph')}
               title="View the region of valid angle pairs."
-              className={`rounded-md px-3 py-2 text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${simulatorMode === 'graph' ? 'bg-fuchsia-300/15 text-fuchsia-100 shadow-sm' : 'text-slate-500 hover:text-slate-200 hover:bg-white/5'}`}
+              className={`rounded-md px-2 py-1.5 text-xs font-semibold transition-all flex items-center justify-center gap-1 whitespace-nowrap ${simulatorMode === 'graph' ? 'bg-violet-400/20 text-violet-100 shadow-sm' : 'text-slate-500 hover:text-slate-200 hover:bg-white/5'}`}
             >
               <Activity className="w-4 h-4"/> Graph Plot
             </button></div>
@@ -4191,61 +4198,65 @@ export default function App() {
                 </button>
               </div>
 
-              <div className="mt-3 pt-3 border-t border-white/10 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-                Active: <span className="text-cyan-200">{activeSequence?.label}</span> — Constrained/Unconstrained, Separation Epsilon, and Search below apply to it.
-              </div>
-              <div className="mt-2 grid grid-cols-2 gap-1 rounded-lg border border-white/10 bg-[#0b1016] p-1">
-                <button
-                  onClick={() => { setShotPathReference(null); setLockedShotNotice(null); setShotEditMode(SHOT_MODE_LOCKED); }}
-                  title="Reject angle edits before they can make the current code-mode shot invalid."
-                  className={`rounded-md px-2 py-1.5 text-[11px] font-bold transition-all flex items-center justify-center gap-1.5 ${shotEditMode === SHOT_MODE_LOCKED ? 'bg-emerald-400/15 text-emerald-100 shadow-sm' : 'text-slate-500 hover:text-slate-200 hover:bg-white/5'}`}
-                >
-                  <ShieldCheck className="w-3.5 h-3.5" /> Constrained
-                </button>
-                <button
-                  onClick={() => { setShotPathReference(simulatorMode === 'code' ? buildCodePathReference(codeData) : null); setLockedShotNotice(null); setShotEditMode(SHOT_MODE_UNCONSTRAINED); }}
-                  title="Allow invalid shots and render them in unconstrained mode."
-                  className={`rounded-md px-2 py-1.5 text-[11px] font-bold transition-all flex items-center justify-center gap-1.5 ${shotEditMode === SHOT_MODE_UNCONSTRAINED ? 'bg-slate-300/15 text-slate-100 shadow-sm' : 'text-slate-500 hover:text-slate-200 hover:bg-white/5'}`}
-                >
-                  <Eye className="w-3.5 h-3.5" /> Unconstrained
-                </button>
-              </div>
-              <div className="mt-3 grid grid-cols-[1fr_auto] gap-2 items-end">
-                <label className="block">
-                  <span className="text-[10px] uppercase tracking-wider font-bold text-slate-500 block mb-1">Separation Epsilon</span>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.0000000001"
-                    value={clearanceEpsilonInput}
-                    onChange={e => { resetShotConstraintReference(); setClearanceEpsilonInput(e.target.value); }}
-                    className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2.5 py-1.5 text-xs focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 transition-all"
-                  />
-                </label>
-                <button
-                  onClick={handleStableRegionSearch}
-                  disabled={baseInputMode !== 'angles' || shotClearanceValidation.status !== 'valid'}
-                  title="Search the local symbolic x/y angle region that preserves the current valid shot."
-                  className="h-[34px] px-2.5 rounded-md border border-cyan-300/25 bg-cyan-400/10 text-cyan-100 hover:bg-cyan-400/15 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center justify-center"
-                >
-                  <Search className="w-4 h-4" />
-                </button>
-              </div>
-              {stableRegionResult && (
-                <div className={`mt-3 rounded-md border px-2.5 py-2 text-[10px] leading-relaxed ${stableRegionResult.status === 'found' ? 'border-cyan-300/20 bg-cyan-400/10 text-cyan-100' : stableRegionResult.status === 'running' ? 'border-slate-300/20 bg-slate-400/10 text-slate-200' : 'border-amber-300/20 bg-amber-500/10 text-amber-100'}`}>
-                  {stableRegionResult.status === 'found' ? (
-                    <div className="font-mono">
-                      x in ({formatFixed(stableRegionResult.intervals.xMin)}, {formatFixed(stableRegionResult.intervals.xMax)})<br />
-                      y in ({formatFixed(stableRegionResult.intervals.yMin)}, {formatFixed(stableRegionResult.intervals.yMax)})
-                      <span className="block mt-1 text-slate-400">step={formatFixed(stableRegionResult.step)} visits={stableRegionResult.visits}{stableRegionResult.capped ? ' capped' : ''}</span>
-                    </div>
-                  ) : (
-                    <div className="flex gap-1.5 items-start">
-                      <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                      <span>{stableRegionResult.message || 'Stable region search did not return an interval.'}</span>
+              {simulatorMode !== 'graph' && (
+                <>
+                  <div className="mt-3 pt-3 border-t border-white/10 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                    Active: <span className="text-cyan-200">{activeSequence?.label}</span> — Constrained/Unconstrained, Separation Epsilon, and Search below apply to it.
+                  </div>
+                  <div className="mt-2 grid grid-cols-2 gap-1 rounded-lg border border-white/10 bg-[#0b1016] p-1">
+                    <button
+                      onClick={() => { setShotPathReference(null); setLockedShotNotice(null); setShotEditMode(SHOT_MODE_LOCKED); }}
+                      title="Reject angle edits before they can make the current code-mode shot invalid."
+                      className={`rounded-md px-2 py-1.5 text-[11px] font-bold transition-all flex items-center justify-center gap-1.5 ${shotEditMode === SHOT_MODE_LOCKED ? 'bg-emerald-400/15 text-emerald-100 shadow-sm' : 'text-slate-500 hover:text-slate-200 hover:bg-white/5'}`}
+                    >
+                      <ShieldCheck className="w-3.5 h-3.5" /> Constrained
+                    </button>
+                    <button
+                      onClick={() => { setShotPathReference(simulatorMode === 'code' ? buildCodePathReference(codeData) : null); setLockedShotNotice(null); setShotEditMode(SHOT_MODE_UNCONSTRAINED); }}
+                      title="Allow invalid shots and render them in unconstrained mode."
+                      className={`rounded-md px-2 py-1.5 text-[11px] font-bold transition-all flex items-center justify-center gap-1.5 ${shotEditMode === SHOT_MODE_UNCONSTRAINED ? 'bg-slate-300/15 text-slate-100 shadow-sm' : 'text-slate-500 hover:text-slate-200 hover:bg-white/5'}`}
+                    >
+                      <Eye className="w-3.5 h-3.5" /> Unconstrained
+                    </button>
+                  </div>
+                  <div className="mt-3 grid grid-cols-[1fr_auto] gap-2 items-end">
+                    <label className="block">
+                      <span className="text-[10px] uppercase tracking-wider font-bold text-slate-500 block mb-1">Separation Epsilon</span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.0000000001"
+                        value={clearanceEpsilonInput}
+                        onChange={e => { resetShotConstraintReference(); setClearanceEpsilonInput(e.target.value); }}
+                        className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2.5 py-1.5 text-xs focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 transition-all"
+                      />
+                    </label>
+                    <button
+                      onClick={handleStableRegionSearch}
+                      disabled={baseInputMode !== 'angles' || shotClearanceValidation.status !== 'valid'}
+                      title="Search the local symbolic x/y angle region that preserves the current valid shot."
+                      className="h-[34px] px-2.5 rounded-md border border-cyan-300/25 bg-cyan-400/10 text-cyan-100 hover:bg-cyan-400/15 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center justify-center"
+                    >
+                      <Search className="w-4 h-4" />
+                    </button>
+                  </div>
+                  {stableRegionResult && (
+                    <div className={`mt-3 rounded-md border px-2.5 py-2 text-[10px] leading-relaxed ${stableRegionResult.status === 'found' ? 'border-cyan-300/20 bg-cyan-400/10 text-cyan-100' : stableRegionResult.status === 'running' ? 'border-slate-300/20 bg-slate-400/10 text-slate-200' : 'border-amber-300/20 bg-amber-500/10 text-amber-100'}`}>
+                      {stableRegionResult.status === 'found' ? (
+                        <div className="font-mono">
+                          x in ({formatFixed(stableRegionResult.intervals.xMin)}, {formatFixed(stableRegionResult.intervals.xMax)})<br />
+                          y in ({formatFixed(stableRegionResult.intervals.yMin)}, {formatFixed(stableRegionResult.intervals.yMax)})
+                          <span className="block mt-1 text-slate-400">step={formatFixed(stableRegionResult.step)} visits={stableRegionResult.visits}{stableRegionResult.capped ? ' capped' : ''}</span>
+                        </div>
+                      ) : (
+                        <div className="flex gap-1.5 items-start">
+                          <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                          <span>{stableRegionResult.message || 'Stable region search did not return an interval.'}</span>
+                        </div>
+                      )}
                     </div>
                   )}
-                </div>
+                </>
               )}
             </div>
           )}
@@ -4346,42 +4357,44 @@ export default function App() {
             )}
 
             {/* VERTEX LOGS */}
-            <div className="bg-[#151c24] p-4 rounded-lg border border-white/10 shadow-[0_8px_28px_rgba(0,0,0,0.22)]">
-              <div className="flex items-center justify-between mb-3 border-b border-white/10 pb-2">
-                <h2 className="text-[10px] uppercase tracking-wider font-bold text-slate-400 flex items-center gap-1.5">
-                  <List className="w-3 h-3"/> Vertices Log
-                </h2>
-                <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500 cursor-pointer hover:text-cyan-200 transition-colors">
-                  <input type="checkbox" checked={showAllLabels} onChange={e => setShowAllLabels(e.target.checked)} className="accent-cyan-400 w-3 h-3" />
-                  PERSIST LABELS
-                </label>
-              </div>
-
-              <div className="space-y-2">
-                <div className="text-xs font-mono bg-[#0b1016] p-2.5 rounded-md border border-white/10 relative overflow-hidden">
-                  <div className="absolute left-0 top-0 bottom-0 w-1 bg-slate-300" />
-                  <div className="font-bold mb-1.5 text-slate-200 ml-1">{baseTriangle.name}</div>
-                  <div className="grid grid-cols-1 gap-y-1 text-slate-500 ml-1 break-all">
-                    <div>A ({labelsMap[0]}): <span className="text-slate-200 font-medium">{formatPoint(baseTriangle.points[0])}</span></div>
-                    <div>B ({labelsMap[1]}): <span className="text-slate-200 font-medium">{formatPoint(baseTriangle.points[1])}</span></div>
-                    <div>C ({labelsMap[2]}): <span className="text-slate-200 font-medium">{formatPoint(baseTriangle.points[2])}</span></div>
-                  </div>
+            {simulatorMode !== 'graph' && (
+              <div className="bg-[#151c24] p-4 rounded-lg border border-white/10 shadow-[0_8px_28px_rgba(0,0,0,0.22)]">
+                <div className="flex items-center justify-between mb-3 border-b border-white/10 pb-2">
+                  <h2 className="text-[10px] uppercase tracking-wider font-bold text-slate-400 flex items-center gap-1.5">
+                    <List className="w-3 h-3"/> Vertices Log
+                  </h2>
+                  <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500 cursor-pointer hover:text-cyan-200 transition-colors">
+                    <input type="checkbox" checked={showAllLabels} onChange={e => setShowAllLabels(e.target.checked)} className="accent-cyan-400 w-3 h-3" />
+                    PERSIST LABELS
+                  </label>
                 </div>
 
-                {activeTriangles.slice(0, 50).map(tri => (
-                  <div key={tri.id} className="text-[11px] font-mono bg-[#111821] p-2 rounded-md border border-white/10 shadow-sm relative overflow-hidden hover:bg-[#18222c] transition-colors">
-                    <div className="absolute left-0 top-0 bottom-0 w-1" style={{ backgroundColor: getTriangleRenderStyle(tri).color }} />
-                    <div className="font-bold mb-1 text-slate-300 ml-1.5">{tri.id}</div>
-                    <div className="grid grid-cols-1 gap-y-0.5 text-slate-500 ml-1.5 break-all">
-                      <div>A: <span className="text-slate-300">{formatPoint(tri.points[0])}</span></div>
-                      <div>B: <span className="text-slate-300">{formatPoint(tri.points[1])}</span></div>
-                      <div>C: <span className="text-slate-300">{formatPoint(tri.points[2])}</span></div>
+                <div className="space-y-2">
+                  <div className="text-xs font-mono bg-[#0b1016] p-2.5 rounded-md border border-white/10 relative overflow-hidden">
+                    <div className="absolute left-0 top-0 bottom-0 w-1 bg-slate-300" />
+                    <div className="font-bold mb-1.5 text-slate-200 ml-1">{baseTriangle.name}</div>
+                    <div className="grid grid-cols-1 gap-y-1 text-slate-500 ml-1 break-all">
+                      <div>A ({labelsMap[0]}): <span className="text-slate-200 font-medium">{formatPoint(baseTriangle.points[0])}</span></div>
+                      <div>B ({labelsMap[1]}): <span className="text-slate-200 font-medium">{formatPoint(baseTriangle.points[1])}</span></div>
+                      <div>C ({labelsMap[2]}): <span className="text-slate-200 font-medium">{formatPoint(baseTriangle.points[2])}</span></div>
                     </div>
                   </div>
-                ))}
-                {activeTriangles.length > 50 && <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 text-center py-2 bg-[#0b1016] rounded-md border border-white/10">...and {activeTriangles.length - 50} more</div>}
+
+                  {activeTriangles.slice(0, 50).map(tri => (
+                    <div key={tri.id} className="text-[11px] font-mono bg-[#111821] p-2 rounded-md border border-white/10 shadow-sm relative overflow-hidden hover:bg-[#18222c] transition-colors">
+                      <div className="absolute left-0 top-0 bottom-0 w-1" style={{ backgroundColor: getTriangleRenderStyle(tri).color }} />
+                      <div className="font-bold mb-1 text-slate-300 ml-1.5">{tri.id}</div>
+                      <div className="grid grid-cols-1 gap-y-0.5 text-slate-500 ml-1.5 break-all">
+                        <div>A: <span className="text-slate-300">{formatPoint(tri.points[0])}</span></div>
+                        <div>B: <span className="text-slate-300">{formatPoint(tri.points[1])}</span></div>
+                        <div>C: <span className="text-slate-300">{formatPoint(tri.points[2])}</span></div>
+                      </div>
+                    </div>
+                  ))}
+                  {activeTriangles.length > 50 && <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 text-center py-2 bg-[#0b1016] rounded-md border border-white/10">...and {activeTriangles.length - 50} more</div>}
+                </div>
               </div>
-            </div>
+            )}
 
           </div>
         </div>
@@ -4393,24 +4406,30 @@ export default function App() {
         
         {/* Floating Canvas Toolbar */}
         
-      {simulatorMode === 'graph' ? (
-        <GraphSimulatorView
-          sequences={sequences}
-          activeSequenceId={activeSequenceId}
-          angleParams={angleParams}
-          baseLength={Number(angleParams.length) || 0}
-          buildValidateCandidateForSequence={buildValidateCandidateForSequence}
-          refreshToken={0}
-          onEditGraphs={() => setIsGraphSetupOpen(true)}
-          onRowStatusChange={(id, info) => setPlotStatusById(prev => ({ ...prev, [id]: info }))}
-          forceGenerateRequest={forceGenerateRequest}
-          initialIsViewLocked={restoredWorkspace?.anglePlotWindow?.isViewLocked}
-          initialLegendCollapsed={restoredWorkspace?.anglePlotWindow?.legendCollapsed}
-          initialPanelZoom={restoredWorkspace?.anglePlotWindow?.panelZoom}
-          initialPanelPan={restoredWorkspace?.anglePlotWindow?.panelPan}
-          onWorkspaceStateChange={(state) => { anglePlotWindowStateRef.current = state; scheduleAutosave(); }}
-        />
-      ) : (<>
+        {/* Graph Plot Canvas — always mounted, hidden when not active */}
+        <div style={{ display: simulatorMode === 'graph' ? 'flex' : 'none' }}
+             className="w-full h-full flex-col absolute inset-0">
+          <GraphSimulatorView
+            sequences={sequences}
+            activeSequenceId={activeSequenceId}
+            angleParams={angleParams}
+            baseLength={Number(angleParams.length) || 0}
+            buildValidateCandidateForSequence={buildValidateCandidateForSequence}
+            refreshToken={0}
+            onEditGraphs={() => setIsGraphSetupOpen(true)}
+            onRowStatusChange={(id, info) => setPlotStatusById(prev => ({ ...prev, [id]: info }))}
+            forceGenerateRequest={forceGenerateRequest}
+            initialIsViewLocked={restoredWorkspace?.anglePlotWindow?.isViewLocked}
+            initialLegendCollapsed={restoredWorkspace?.anglePlotWindow?.legendCollapsed}
+            initialPanelZoom={restoredWorkspace?.anglePlotWindow?.panelZoom}
+            initialPanelPan={restoredWorkspace?.anglePlotWindow?.panelPan}
+            onWorkspaceStateChange={(state) => { anglePlotWindowStateRef.current = state; scheduleAutosave(); }}
+          />
+        </div>
+
+        {/* SVG Canvas + Toolbar — always mounted, hidden when graph mode is active */}
+        <div style={{ display: simulatorMode !== 'graph' ? 'block' : 'none' }}
+             className="w-full h-full">
         <div className="absolute top-4 right-4 z-10 flex gap-2">
            {simulatorMode === 'code' && (
              <div className="bg-[#101820]/95 text-slate-400 px-3 py-2 text-[11px] rounded-md shadow-[0_8px_24px_rgba(0,0,0,0.32)] border border-white/10 font-mono font-bold flex items-center backdrop-blur">
@@ -4428,24 +4447,33 @@ export default function App() {
               step="0.1"
               value={zoomMagnification}
               onChange={(e) => setZoomMagnification(e.target.value)}
-              className="w-14 bg-transparent hover:bg-white/5 text-slate-200 px-2 py-2 text-xs font-bold text-center border-r border-white/10 outline-none transition-colors"
+              aria-label="Zoom magnification multiplier"
+              className="w-14 bg-transparent hover:bg-white/5 text-slate-200 px-2 py-2 text-xs font-bold text-center border-r border-white/10 outline-none transition-colors focus:ring-1 focus:ring-cyan-300"
               title="Magnification multiplier applied by the Zoom In/Out buttons."
             />
-            <button onClick={handleManualZoomIn} className="p-2 hover:bg-[#172230] text-slate-300 hover:text-cyan-200 border-r border-white/10 transition-colors" title="Zoom In">
-              <ZoomIn className="w-4 h-4" />
+            <button onClick={handleManualZoomIn} className="px-2.5 py-2 hover:bg-[#172230] text-slate-300 hover:text-cyan-200 border-r border-white/10 transition-colors flex items-center gap-1.5" title="Zoom In">
+              <ZoomIn className="w-3.5 h-3.5" />
+              <span className="text-[10px] font-bold">Zoom In</span>
             </button>
-            <button onClick={handleManualZoomOut} className="p-2 hover:bg-[#172230] text-slate-300 hover:text-cyan-200 border-r border-white/10 transition-colors" title="Zoom Out">
-              <ZoomOut className="w-4 h-4" />
+            <button onClick={handleManualZoomOut} className="px-2.5 py-2 hover:bg-[#172230] text-slate-300 hover:text-cyan-200 border-r border-white/10 transition-colors flex items-center gap-1.5" title="Zoom Out">
+              <ZoomOut className="w-3.5 h-3.5" />
+              <span className="text-[10px] font-bold">Zoom Out</span>
             </button>
-            <button onClick={handleFitScreen} className="p-2 hover:bg-[#172230] text-slate-300 hover:text-cyan-200 border-r border-white/10 transition-colors" title="Fit View">
-              <Maximize className="w-4 h-4" />
+            <button onClick={handleFitScreen} className="px-2.5 py-2 hover:bg-[#172230] text-slate-300 hover:text-cyan-200 border-r border-white/10 transition-colors flex items-center gap-1.5" title="Fit View">
+              <Maximize className="w-3.5 h-3.5" />
+              <span className="text-[10px] font-bold">Fit View</span>
+            </button>
+            <button onClick={() => { setZoom(35); setPan({ x: 5, y: 4 }); }} className="px-2.5 py-2 hover:bg-[#172230] text-slate-300 hover:text-cyan-200 border-r border-white/10 transition-colors flex items-center gap-1.5" title="Reset View">
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span className="text-[10px] font-bold">Reset</span>
             </button>
             <button
               onClick={() => setIsZoomLocked(current => !current)}
-              className={`p-2 transition-colors ${isZoomLocked ? 'bg-cyan-500/20 text-cyan-200' : 'hover:bg-[#172230] text-slate-300 hover:text-cyan-200'}`}
+              className={`px-2.5 py-2 transition-colors flex items-center gap-1.5 ${isZoomLocked ? 'bg-cyan-500/20 text-cyan-200' : 'hover:bg-[#172230] text-slate-300 hover:text-cyan-200'}`}
               title={isZoomLocked ? 'Unlock View' : 'Lock View'}
             >
-              {isZoomLocked ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}
+              {isZoomLocked ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
+              <span className="text-[10px] font-bold">{isZoomLocked ? 'Unlock View' : 'Lock View'}</span>
             </button>
           </div>
         </div>
@@ -4797,7 +4825,7 @@ export default function App() {
             </g>
           </svg>
         </div>
-      </>)}
+      </div>
       </div>
 
       {/* Valid Angle A-B Region pop-up. A single boolean controls mounting,
@@ -4870,7 +4898,7 @@ export default function App() {
           system existed to reuse, so this is a small self-contained one. */}
       {errorModal && (
         <div
-          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4"
+          className="fixed inset-0 z-[90] flex items-center justify-center bg-black/50 p-4"
           onClick={closeErrorModal}
           onKeyDown={e => { if (e.key === 'Escape') closeErrorModal(); }}
         >
@@ -4916,13 +4944,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Theme-aware scrollbar styling */}
-      <style>{`
-        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 4px; }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
-      `}</style>
+
     </div>
   );
 }

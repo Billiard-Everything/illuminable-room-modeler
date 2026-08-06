@@ -6,7 +6,7 @@ const APP_SOURCE_URL = new URL('../src/App.jsx', import.meta.url);
 
 const loadMathApi = () => {
   const source = readFileSync(APP_SOURCE_URL, 'utf8');
-  const helperSource = source.split('export default function App()')[0].replace(/^import .*$/gm, '');
+  const helperSource = source.split('const GraphSimulatorView')[0].replace(/^import .*$/gm, '');
   eval(`${helperSource}
 globalThis.__unfolderMathApi = {
   buildBaseTriangle,
