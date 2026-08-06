@@ -1,7 +1,7 @@
 // React supplies state, refs, effects, and memoization for this client-only tool.
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 // Lucide supplies recognizable control/status icons without custom SVG code.
-import { Maximize, RefreshCw, RotateCcw, Zap, Settings2, List, Code2, Compass, ChevronRight, ChevronLeft, Activity, CheckCircle2, XCircle, ShieldCheck, Eye, EyeOff, Search, AlertTriangle, Sun, Moon, ZoomIn, ZoomOut, Lock, Unlock, ScatterChart, Plus, Loader2, Trash2, Library, Database } from 'lucide-react';
+import { Maximize, RotateCcw, Zap, Settings2, List, Code2, Compass, ChevronRight, ChevronLeft, Activity, CheckCircle2, XCircle, ShieldCheck, Eye, EyeOff, Search, AlertTriangle, Sun, Moon, ZoomIn, ZoomOut, Lock, Unlock, ScatterChart, Plus, Loader2, Trash2, Library, Database } from 'lucide-react';
 // The angle-region plot pop-up lives in its own module (see src/anglePlot) so
 // it can be unit-tested without React and does not bloat this file further.
 import GraphSetupWindow from './sequences/GraphSetupWindow.jsx';
@@ -1626,7 +1626,7 @@ const jobPriorityForSequence = (seq, activeSequenceId, everRequestedIds) => {
 
 const GraphSimulatorView = ({
   sequences, activeSequenceId, angleParams, baseLength, buildValidateCandidateForSequence, refreshToken,
-  onEditGraphs, onRowStatusChange, forceGenerateRequest,
+  onRowStatusChange, forceGenerateRequest,
   onShowAllGraphs, onHideAllGraphs, onToggleSequenceVisible,
   initialIsViewLocked, initialLegendCollapsed,
   initialPanelZoom, initialPanelPan,
@@ -2304,14 +2304,6 @@ const GraphSimulatorView = ({
       scheduleRenderForSequence(seq, viewState);
     }
   }, [scheduleRenderForSequence, scheduleWorkspaceReport]);
-  const runGeneration = useCallback(() => {
-    for (const seq of sequences) {
-      if (seq.visible) scheduleRenderForSequence(seq, lastViewStateRef.current, { immediate: true });
-    }
-  }, [sequences, scheduleRenderForSequence]);
-
-  const viewButtonClass = "flex items-center gap-1.5 bg-[#101820]/95 hover:bg-[#172230] disabled:opacity-40 disabled:cursor-not-allowed text-slate-200 px-2.5 py-1.5 rounded-md text-[11px] font-bold";
-
   // Build the drawable series list (visible rows only) and the aggregate status line.
   const visibleSequences = sequences.filter((s) => s.visible);
   // The active graph draws last (on top) whenever series overlap, and
@@ -4441,7 +4433,6 @@ export default function App() {
             baseLength={Number(angleParams.length) || 0}
             buildValidateCandidateForSequence={buildValidateCandidateForSequence}
             refreshToken={0}
-            onEditGraphs={() => setIsGraphSetupOpen(true)}
             onRowStatusChange={(id, info) => setPlotStatusById(prev => ({ ...prev, [id]: info }))}
             forceGenerateRequest={forceGenerateRequest}
             onShowAllGraphs={() => setSequences(rows => rows.map(r => ({ ...r, visible: true })))}

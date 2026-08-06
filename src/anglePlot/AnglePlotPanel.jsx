@@ -315,7 +315,7 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ series, currentPoint
       minB: toDataB(size.height),
       maxB: toDataB(0),
     }),
-  }), [isLocked, allPoints, currentPoint, size, maxZoom, clampZoom, zoom, toDataA, toDataB]);
+  }), [allPoints, currentPoint, size, maxZoom, clampZoom, zoom, toDataA, toDataB]);
 
   // Report every zoom/pan/size change (including the very first one, once
   // the real measured canvas size is known) so AnglePlotWindow can debounce
