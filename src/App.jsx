@@ -2507,8 +2507,10 @@ export default function App() {
   ));
 
   // --- RAY SIMULATOR SPECIFIC STATE ---
-  // Physical vertex index used as the origin in direct ray mode.
-  const [rayStartVertex, setRayStartVertex] = useState(() => restoredWorkspace?.rayStartVertex ?? 0);
+  // The trajectory ray is always drawn from vertex A — no longer a user
+  // choice (the old "Origin Vertex" A/B/C picker was removed), so this is
+  // a plain constant rather than state.
+  const rayStartVertex = 0;
   // Ray-mode angle is stored in degrees because that is what the UI exposes.
   const [rayAngle, setRayAngle] = useState(() => restoredWorkspace?.rayAngle ?? 60);
   // Ray-mode bounce limit prevents accidental infinite or huge unfoldings.
@@ -2693,7 +2695,6 @@ export default function App() {
     baseTriangleLength,
     angleStepControlIncrementInput,
     baseCoordsInput,
-    rayStartVertex,
     rayAngle,
     maxBounces,
     sequences,
@@ -2740,7 +2741,7 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     theme, isSidebarVisible, simulatorMode, baseInputMode, baseTriangleLength,
-    angleStepControlIncrementInput, baseCoordsInput, rayStartVertex, rayAngle, maxBounces,
+    angleStepControlIncrementInput, baseCoordsInput, rayAngle, maxBounces,
     sequences, activeSequenceId, shotEditMode, clearanceEpsilonInput, showAllLabels,
     displayPrecisionInput, pan, zoom, isZoomLocked, zoomMagnification,
   ]);
@@ -3896,18 +3897,8 @@ export default function App() {
                     now live on each graph's own card (Sequence Parser list
                     below) so every graph keeps fully independent values —
                     Base Length is the only geometry value every graph
-                    still shares. */}
-                <div className="flex items-center gap-2">
-                  <span className="text-[11px] font-bold text-slate-500 w-16 text-right mr-1">Base Length</span>
-                  <input
-                    type="number"
-                    step="any"
-                    value={angleParams.length}
-                    onChange={e => handleAngleParamChange('length', e.target.value)}
-                    placeholder="Enter Base Length"
-                    className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2.5 py-1.5 text-sm focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 placeholder:text-slate-600 transition-all"
-                  />
-                </div>
+                    still shares. Its input lives in the compact row below,
+                    beside Display Decimals. */}
                 {lockedShotNotice && lockedShotNotice.isLengthField && (
                   <div className="text-[10px] text-amber-100 mt-1 font-medium bg-amber-500/10 rounded py-1.5 px-2 border border-amber-300/20 space-y-1">
                     <div className="font-bold">Base Length of {lockedShotNotice.value} was not applied.</div>
@@ -3923,8 +3914,21 @@ export default function App() {
               </div>
             )}
 
-            <div className="mt-3 pt-3 border-t border-white/10">
-              <label className="grid grid-cols-[1fr_88px] gap-2 items-center">
+            <div className="mt-3 pt-3 border-t border-white/10 flex items-end gap-3">
+              {baseInputMode === 'angles' && (
+                <label className="flex flex-col gap-1">
+                  <span className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Base Length</span>
+                  <input
+                    type="number"
+                    step="any"
+                    value={angleParams.length}
+                    onChange={e => handleAngleParamChange('length', e.target.value)}
+                    placeholder="Length"
+                    className="w-16 bg-[#0b1016] border border-white/10 rounded-md px-2 py-1 text-xs text-center focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 placeholder:text-slate-600 transition-all"
+                  />
+                </label>
+              )}
+              <label className="flex flex-col gap-1">
                 <span className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Display Decimals</span>
                 <input
                   type="number"
@@ -3934,7 +3938,7 @@ export default function App() {
                   value={displayPrecisionInput}
                   onChange={e => setDisplayPrecisionInput(e.target.value)}
                   title={`Number of decimal places shown in readouts, clamped from 0 to ${MAX_DISPLAY_DECIMALS}.`}
-                  className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2 py-1.5 text-xs text-center focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 transition-all"
+                  className="w-16 bg-[#0b1016] border border-white/10 rounded-md px-2 py-1 text-xs text-center focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 transition-all"
                 />
               </label>
             </div>
@@ -3948,28 +3952,10 @@ export default function App() {
               </h2>
               <div className="space-y-4">
                 <div>
-                  <label className="text-[11px] font-bold text-slate-400 flex justify-between mb-1.5"><span>Origin Vertex</span></label>
-                  <div className="flex gap-2">
-                    {[0, 1, 2].map(v => (
-                      <button
-                        key={v}
-                        onClick={() => setRayStartVertex(v)}
-                        title={`Start the ray at vertex ${['A', 'B', 'C'][v]}.`}
-                        className={`flex-1 py-1.5 text-xs rounded-md font-bold border transition-colors ${rayStartVertex === v ? 'bg-amber-300/15 border-amber-300/40 text-amber-100' : 'bg-[#0b1016] border-white/10 text-slate-500 hover:text-slate-200 hover:border-slate-500/50'}`}
-                      >
-                        Start {['A', 'B', 'C'][v]}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div>
                   <label className="text-[11px] font-bold text-slate-400 flex justify-between mb-1.5"><span>Trajectory Angle</span></label>
-                  <div className="flex gap-3 items-center">
-                    <input type="range" min="0" max="360" step="0.1" value={rayAngle} onChange={e => setRayAngle(parseFloat(e.target.value))} className="flex-1 accent-amber-600" />
-                    <div className="relative w-20">
-                      <input type="number" value={rayAngle} onChange={e => setRayAngle(parseFloat(e.target.value))} className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2 py-1.5 text-xs text-center focus:bg-[#101923] focus:border-amber-300 focus:ring-1 focus:ring-amber-300 outline-none font-mono text-slate-100" />
-                      <span className="absolute right-1.5 top-1.5 text-slate-500 font-mono text-xs">&deg;</span>
-                    </div>
+                  <div className="relative w-20">
+                    <input type="number" value={rayAngle} onChange={e => setRayAngle(parseFloat(e.target.value))} className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2 py-1.5 text-xs text-center focus:bg-[#101923] focus:border-amber-300 focus:ring-1 focus:ring-amber-300 outline-none font-mono text-slate-100" />
+                    <span className="absolute right-1.5 top-1.5 text-slate-500 font-mono text-xs">&deg;</span>
                   </div>
                 </div>
                 <div>
