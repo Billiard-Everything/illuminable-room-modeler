@@ -94,10 +94,10 @@ const THEME_PALETTES = {
 };
 
 // Mapping triangle edges (0, 1, 2) to their standard Side numbers (1, 2, 3)
-// Edge 0 (V0-V1) is opposite V2(C) -> Side 3
-// Edge 1 (V1-V2) is opposite V0(A) -> Side 1
+// Edge 0 (V0-V1) is opposite V2(C) -> Side 1
+// Edge 1 (V1-V2) is opposite V0(A) -> Side 3
 // Edge 2 (V2-V0) is opposite V1(B) -> Side 2
-const EDGE_TO_SIDE = { 0: 3, 1: 1, 2: 2 };
+const EDGE_TO_SIDE = { 0: 1, 1: 3, 2: 2 };
 
 // The locked/preview switch stores a short machine value instead of display text.
 const SHOT_MODE_LOCKED = 'locked';
