@@ -587,7 +587,7 @@ const deriveEffectiveSequenceCode = (sequenceText, rayAngleInput, baseTriangle, 
   const typedCode = (sequenceText || '').trim();
   if (typedCode) return typedCode;
   // Number('') and Number('   ') both coerce to 0 (not NaN), so a blank
-  // Trace Ray Angle would otherwise silently resolve to a real 0deg shot
+  // Angle Ray would otherwise silently resolve to a real 0deg shot
   // instead of "no angle given" — trim and reject blank explicitly first.
   const trimmedAngle = (rayAngleInput ?? '').toString().trim();
   if (!trimmedAngle) return '';
@@ -2601,7 +2601,7 @@ export default function App() {
   // Two modes share the same viewer: geometric ray tracing and code unfolding.
   const [simulatorMode, setSimulatorMode] = useState(() => (
     // 'ray' was a separate tab in older saved workspaces, since merged into
-    // 'code' (a graph's Trace Ray Angle now lives beside its own Code
+    // 'code' (a graph's Angle Ray now lives beside its own Code
     // Sequence) — fall back to 'code' so a restored save never lands on a
     // mode that no longer exists.
     restoredWorkspace?.simulatorMode === 'graph' ? 'graph' : 'code'
@@ -2630,7 +2630,7 @@ export default function App() {
       : [{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 5, y: 5 }]
   ));
 
-  // A Trace Ray Angle (per-row, see rayAngleInput on the sequence row
+  // A Angle Ray (per-row, see rayAngleInput on the sequence row
   // model) is traced from vertex A every time — no separate Origin Vertex
   // choice. Max Bounces stays a single shared safety cap (like Base Length)
   // rather than a per-row value, since it bounds computation rather than
@@ -2693,7 +2693,7 @@ export default function App() {
   // Sequence-text <input> elements by row id, so the error modal can return
   // focus to the exact row that was rejected once it's dismissed.
   const sequenceInputRefsRef = useRef({});
-  // Which row's Trace Ray Angle field is currently focused, if any — while
+  // Which row's Angle Ray field is currently focused, if any — while
   // focused, that field shows the raw draft being typed (see the field's
   // own value expression) so numbers don't jump under the user's cursor;
   // at rest it always mirrors Global Angle, per the root-cause note there.
@@ -2960,7 +2960,7 @@ export default function App() {
     return value.toFixed(displayPrecision);
   };
 
-  // Global Angle and Trace Ray Angle specifically: a whole-number angle
+  // Global Angle and Angle Ray specifically: a whole-number angle
   // (typed as plain "3", or landing on exactly 3.0 after computation) shows
   // as "3.0", not the full displayPrecision run of trailing zeros — every
   // other numeric readout keeps using formatFixed's full precision.
@@ -2987,7 +2987,7 @@ export default function App() {
   }, [baseCoordsInput, baseInputMode, angleParams, themePalette.baseTriangle]);
 
   // The active row's own Code Sequence always wins when non-blank;
-  // otherwise its Trace Ray Angle (if set) is traced against this same
+  // otherwise its Angle Ray (if set) is traced against this same
   // baseTriangle and converted back into its equivalent code — see
   // deriveEffectiveSequenceCode. Kept as "billiardsCode" so every existing
   // reader keeps working against "whichever code is actually driving the
@@ -3005,7 +3005,7 @@ export default function App() {
   // below its own code sequence, computed against that row's own committed
   // Angle A/B (not the shared angleParams/baseTriangle above, which only
   // ever reflects the active row) — and, same as the active row above,
-  // falls back to that row's own Trace Ray Angle when its Code Sequence is
+  // falls back to that row's own Angle Ray when its Code Sequence is
   // blank.
   const codeDataByRowId = useMemo(() => {
     const map = {};
@@ -3016,7 +3016,7 @@ export default function App() {
       const effectiveCode = deriveEffectiveSequenceCode(row.sequenceText, row.rayAngleInput, rowTriangle, maxBounces);
       if (!effectiveCode) { map[row.id] = null; continue; }
       const rowCodeData = unfoldCodeData(effectiveCode, rowTriangle, true);
-      // The Trace Ray Angle field displays this (instead of its own raw
+      // The Angle Ray field displays this (instead of its own raw
       // draft text) whenever a Code Sequence is actually driving the row,
       // so it always reads the true angle of the rendered shot — matching
       // the active row's own Shot Vector "Global Angle" readout exactly
@@ -3733,7 +3733,7 @@ export default function App() {
     // 'sequence'-tagged errors so an unrelated Angle/Step error is untouched.
     if (row.draftSequenceText === row.sequenceText && !(row.validationError && row.validationErrorSource === 'sequence')) return true;
     // An intentionally-cleared code is now a valid state (this row may be
-    // relying on its own Trace Ray Angle instead — see
+    // relying on its own Angle Ray instead — see
     // deriveEffectiveSequenceCode), so only a non-blank draft goes through
     // format validation; blank always commits straight through.
     if (row.draftSequenceText.trim()) {
@@ -3784,7 +3784,7 @@ export default function App() {
     setSequences(rows => rows.map(row => row.id === id ? { ...row, draftSequenceText: row.sequenceText, validationError: null, validationErrorSource: null } : row));
   };
 
-  // Trace Ray Angle needs none of the Code Sequence field's heavy
+  // Angle Ray needs none of the Code Sequence field's heavy
   // Vertex Line Test gating: it's only ever consulted when this row's own
   // Code Sequence is blank (see deriveEffectiveSequenceCode), and the code
   // it derives is traced from a real reflection path, so it can never fail
@@ -4003,7 +4003,7 @@ export default function App() {
           <div className="grid grid-cols-2 gap-1 rounded-lg border border-white/10 bg-[#070b10] p-1">
             <button
               onClick={() => setSimulatorMode('code')}
-              title="Unfold a code sequence or a traced Trace Ray Angle, per graph."
+              title="Unfold a code sequence or a traced Angle Ray, per graph."
               className={`rounded-md px-2 py-1.5 text-xs font-semibold transition-all flex items-center justify-center gap-1 whitespace-nowrap ${simulatorMode === 'code' ? 'bg-cyan-300/15 text-cyan-100 shadow-sm' : 'text-slate-500 hover:text-slate-200 hover:bg-white/5'}`}
             >
               <Code2 className="w-4 h-4"/> Unfold Code
@@ -4067,7 +4067,7 @@ export default function App() {
               </div>
             ) : (
               <div className="space-y-2.5">
-                {/* Angle A, Angle B, Angle Step, Trace Ray Angle, and Plot
+                {/* Angle A, Angle B, Angle Step, Angle Ray, and Plot
                     Valid Angle Region all live on each graph's own card
                     (Sequence Parser list below) so every graph keeps fully
                     independent values —
@@ -4084,7 +4084,7 @@ export default function App() {
                   </div>
                 )}
                 <p className="text-[10px] text-slate-500 leading-relaxed">
-                  Angle A, Angle B, Angle Step, Trace Ray Angle, and Plot Valid Angle Region are set per graph in the Sequence Parser list below.
+                  Angle A, Angle B, Angle Step, Angle Ray, and Plot Valid Angle Region are set per graph in the Sequence Parser list below.
                 </p>
               </div>
             )}
@@ -4125,7 +4125,7 @@ export default function App() {
                   step="1"
                   value={maxBounces}
                   onChange={e => setMaxBounces(parseInt(e.target.value))}
-                  title="Safety cap on how many reflections a graph's Trace Ray Angle is traced through before giving up."
+                  title="Safety cap on how many reflections a graph's Angle Ray is traced through before giving up."
                   className="w-16 bg-[#0b1016] border border-white/10 rounded-md px-2 py-1 text-xs text-center focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 transition-all"
                 />
               </label>
@@ -4141,7 +4141,7 @@ export default function App() {
                 <span className="text-[10px] font-mono text-slate-500">{sequences.length} graph{sequences.length === 1 ? '' : 's'}</span>
               </div>
               <p className="text-[10px] text-slate-500 mb-2 leading-relaxed">
-                Each card is one independent graph with its own code, Angle A/B, Angle Step, Trace Ray Angle, and color, plotted together on the shared Valid Angle A-B Region graph. A graph needs either a Code Sequence or a Trace Ray Angle (Code Sequence wins if both are given). Click a card to make it the active unfolding shown on the main canvas.
+                Each card is one independent graph with its own code, Angle A/B, Angle Step, Angle Ray, and color, plotted together on the shared Valid Angle A-B Region graph. A graph needs either a Code Sequence or a Angle Ray (Code Sequence wins if both are given). Click a card to make it the active unfolding shown on the main canvas.
               </p>
               <div className="mb-3 flex gap-2">
                 <button
@@ -4191,12 +4191,12 @@ export default function App() {
                   const anglesIncomplete = row.draftAngleA === '' || row.draftAngleB === '';
                   // Whenever this row's own Code Sequence is set (Code
                   // Sequence always wins — see deriveEffectiveSequenceCode),
-                  // its Trace Ray Angle field shows that code's own Global
+                  // its Angle Ray field shows that code's own Global
                   // Angle (computed in codeDataByRowId) instead of an
                   // editable draft, since the typed angle is ignored anyway.
                   const isRowCodeDriven = row.sequenceText.trim().length > 0;
                   const rowGlobalAngle = codeDataByRowId[row.id]?.globalAngleDegrees;
-                  // Trace Ray Angle must always read back the same value as
+                  // Angle Ray must always read back the same value as
                   // Global Angle (see codeDataByRowId's own comment on why
                   // the two previously disagreed for angle-driven rows): at
                   // rest it mirrors the computed Global Angle unconditionally
@@ -4378,6 +4378,7 @@ export default function App() {
                           `disabled`) while angles are incomplete so a click
                           still fires and can explain why, instead of the
                           browser silently swallowing it. */}
+                      <span className="mt-1.5 block text-[10px] font-bold text-slate-500">Code Seq.</span>
                       <input
                         type="text"
                         ref={el => { sequenceInputRefsRef.current[row.id] = el; }}
@@ -4405,13 +4406,13 @@ export default function App() {
                           if (e.key === 'Enter') { e.preventDefault(); handleApplySequenceDraft(row.id); }
                           else if (e.key === 'Escape') { e.preventDefault(); handleCancelSequenceDraft(row.id); e.currentTarget.blur(); }
                         }}
-                        placeholder={anglesIncomplete ? 'Enter Angle A/B above first' : 'e.g. 1 5 16 5 1 2 3 6'}
+                        placeholder={anglesIncomplete ? 'Enter Angle A/B above first' : 'Enter Code Sequence'}
                         aria-label={`${row.label} sequence text`}
                         aria-disabled={anglesIncomplete}
                         title={anglesIncomplete ? `Set ${row.label}'s Angle A and Angle B above before entering a code.` : 'Type freely, including spaces. Press Enter to apply, Escape to discard the edit.'}
                         className={`mt-1.5 w-full bg-[#080b0f] border rounded px-2 py-1 text-[11px] font-mono outline-none placeholder:text-slate-600 ${anglesIncomplete ? 'border-white/5 text-slate-600 cursor-not-allowed' : 'border-white/10 text-slate-100 focus:border-cyan-300/50'}`}
                       />
-                      {/* Trace Ray Angle: an alternate way to give this
+                      {/* Angle Ray: an alternate way to give this
                           graph a shot without typing a code — only
                           consulted when the Code Sequence above is blank
                           (see deriveEffectiveSequenceCode; a non-blank Code
@@ -4421,8 +4422,8 @@ export default function App() {
                           (see showComputedRayAngle) rather than the raw
                           typed value, so it can never disagree with the
                           Shot Vector panel's own "Global Angle" readout. */}
-                      <div className="mt-1.5 flex items-center gap-1.5">
-                        <span className="text-[10px] font-bold text-slate-500 shrink-0">or</span>
+                      <span className="mt-1.5 block text-[10px] font-bold text-slate-500">Angle Ray</span>
+                      <div className="flex items-center gap-1.5">
                         <div className="relative flex-1">
                           <input
                             type="number"
@@ -4439,30 +4440,53 @@ export default function App() {
                               else if (e.key === 'Escape') { e.preventDefault(); handleCancelRayAngleDraft(row.id); e.currentTarget.blur(); }
                             }}
                             onClick={e => e.stopPropagation()}
-                            placeholder="Trace Ray Angle"
-                            aria-label={`${row.label} trace ray angle`}
+                            placeholder="Enter Angle Ray"
+                            aria-label={`${row.label} angle ray`}
                             title={isRowCodeDriven ? `${row.label}'s Code Sequence above is set, so this shows that code's own Global Angle instead of an editable value.` : `Traced from vertex A; used only while ${row.label}'s Code Sequence above is empty. Shows this shot's own Global Angle once applied.`}
                             className={`w-full bg-[#080b0f] border rounded px-2 py-1 pr-5 text-[11px] font-mono outline-none placeholder:text-slate-600 ${anglesIncomplete || isRowCodeDriven ? 'border-white/5 text-slate-600 cursor-not-allowed' : 'border-white/10 text-slate-100 focus:border-amber-300/50'}`}
                           />
                           <span className="absolute right-1.5 top-1 text-slate-500 font-mono text-[10px]">&deg;</span>
                         </div>
                       </div>
-                      {/* Boundary Intersections: this row's own side sequence,
-                          shown right below its own code sequence in the same
-                          card — mirrors the Unfold Code mode panel, but
+                      {/* Unfolded Sequence + Boundary Intersections: this
+                          row's own derived readouts, shown right below its
+                          own Code Sequence/Angle Ray in the same card
+                          — mirrors the active row's Sequence Logs panel, but
                           computed against this row's own Angle A/B/length
-                          (see codeDataByRowId) instead of the shared/active
-                          triangle. Hidden until there's a real sequence to
-                          report against a valid triangle. The trailing
-                          entry is dropped for the same reason the active
-                          row's own Sequence Logs panel drops it (the
-                          unfolded path's last landing is a vertex, not a
-                          genuine side crossing) — must always match that
-                          panel's own count exactly for the same graph. */}
+                          (see codeDataByRowId) and, critically, from
+                          whichever of the two inputs is actually driving
+                          this row (deriveEffectiveSequenceCode): typing a
+                          Code Sequence shows its Unfolded Sequence here just
+                          as before, and typing a Angle Ray now shows
+                          the exact same thing for the code that angle
+                          derives — both directions always show both
+                          readouts. Hidden until there's a real sequence to
+                          report against a valid triangle. */}
+                      {codeDataByRowId[row.id]?.parsedSequence?.length > 0 && (
+                        <>
+                          <span className="mt-1 block text-[10px] font-bold text-slate-500">Code Seq.</span>
+                          <div className="bg-[#080b0f] border border-white/10 rounded px-2 py-1 flex flex-wrap gap-1">
+                            {codeDataByRowId[row.id].parsedSequence.map((step, idx) => (
+                              <span key={idx} className="bg-[#151c24] text-slate-200 text-[9px] font-mono px-1 py-0.5 rounded border border-white/10 flex items-center">
+                                {step.count}<span className="text-cyan-300 font-bold ml-0.5">{step.angle}</span>
+                              </span>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                      {/* Boundary Intersections: the trailing entry is
+                          dropped for the same reason the active row's own
+                          Sequence Logs panel drops it (the unfolded path's
+                          last landing is a vertex, not a genuine side
+                          crossing) — must always match that panel's own
+                          count exactly for the same graph. */}
                       {codeDataByRowId[row.id]?.sideSequence?.length > 0 && (
-                        <div className="mt-1 bg-[#080b0f] border border-white/10 rounded px-2 py-1 text-[10px] font-mono text-slate-400 tracking-widest break-words">
-                          {codeDataByRowId[row.id].sideSequence.slice(0, -1).join('')}
-                        </div>
+                        <>
+                          <span className="mt-1 block text-[10px] font-bold text-slate-500">Side Seq.</span>
+                          <div className="bg-[#080b0f] border border-white/10 rounded px-2 py-1 text-[10px] font-mono text-slate-400 tracking-widest break-words">
+                            {codeDataByRowId[row.id].sideSequence.slice(0, -1).join('')}
+                          </div>
+                        </>
                       )}
                       {/* Per-graph "Plot Valid Angle Region": validates and
                           calculates only this graph, on the same shared
@@ -4472,7 +4496,7 @@ export default function App() {
                         type="button"
                         onClick={e => { e.stopPropagation(); handlePlotSequenceNow(row.id); }}
                         disabled={!canPlotNow}
-                        title={anglesIncomplete ? 'Set Angle A and Angle B first' : (!row.draftSequenceText.trim() && !row.draftRayAngleInput.trim()) ? 'Enter a Code Sequence or a Trace Ray Angle first' : `Calculate and plot ${row.label} on the shared Valid Angle A-B Region graph`}
+                        title={anglesIncomplete ? 'Set Angle A and Angle B first' : (!row.draftSequenceText.trim() && !row.draftRayAngleInput.trim()) ? 'Enter a Code Sequence or a Angle Ray first' : `Calculate and plot ${row.label} on the shared Valid Angle A-B Region graph`}
                         className="mt-1.5 w-full flex items-center justify-center gap-1.5 bg-cyan-500/15 hover:bg-cyan-500/25 disabled:opacity-40 disabled:cursor-not-allowed border border-cyan-300/30 text-cyan-100 px-2.5 py-1 rounded-md text-[10px] font-bold transition-colors"
                       >
                         {isPlotting ? <Loader2 className="w-3 h-3 animate-spin" /> : <ScatterChart className="w-3 h-3" />}
@@ -4676,7 +4700,7 @@ export default function App() {
             {simulatorMode === 'code' && codeData.parsedSequence.length > 0 && (
               <div className="mb-3 bg-[#151c24] p-4 rounded-lg border border-white/10 shadow-[0_8px_28px_rgba(0,0,0,0.22)]">
                 {/* Only shown when the active row's own Code Sequence is
-                    blank, i.e. it's being driven by its Trace Ray Angle
+                    blank, i.e. it's being driven by its Angle Ray
                     instead (see billiardsCode/deriveEffectiveSequenceCode) —
                     lets that derived code be inspected or promoted into an
                     explicit, editable one via Copy. */}
@@ -4684,7 +4708,7 @@ export default function App() {
                   <div className="mb-3 pb-3 border-b border-white/10">
                     <div className="flex items-center justify-between mb-2">
                       <h3 className="text-[10px] uppercase tracking-wider font-bold text-amber-200 flex items-center gap-1.5">
-                        <Zap className="w-3 h-3" /> Derived From Trace Ray Angle
+                        <Zap className="w-3 h-3" /> Derived From Angle Ray
                       </h3>
                       <button
                         onClick={() => navigator.clipboard.writeText(billiardsCode)}
@@ -4711,7 +4735,7 @@ export default function App() {
                 </div>
                 
                 <h3 className="text-[10px] uppercase tracking-wider font-bold text-slate-400 mt-4 mb-2 flex items-center gap-1.5">
-                  <ChevronRight className="w-3 h-3" /> Boundary Intersections
+                  <ChevronRight className="w-3 h-3" /> Side Seq.
                 </h3>
                 <div className="bg-[#0b1016] p-2.5 rounded-md border border-white/10 max-h-24 overflow-y-auto font-mono text-[11px] font-medium text-slate-300 custom-scrollbar break-words leading-relaxed shadow-inner tracking-widest">
                   {/* The final entry is where the unfolded path lands exactly
