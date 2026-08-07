@@ -1,7 +1,7 @@
 // React supplies state, refs, effects, and memoization for this client-only tool.
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 // Lucide supplies recognizable control/status icons without custom SVG code.
-import { Maximize, RotateCcw, Zap, Settings2, List, Code2, Compass, ChevronRight, ChevronLeft, Activity, CheckCircle2, XCircle, ShieldCheck, Eye, EyeOff, Search, AlertTriangle, Sun, Moon, ZoomIn, ZoomOut, Lock, Unlock, ScatterChart, Plus, Loader2, Trash2, Library, Database, Save } from 'lucide-react';
+import { Maximize, RotateCcw, Zap, Settings2, List, Code2, Compass, ChevronRight, ChevronLeft, Activity, CheckCircle2, XCircle, ShieldCheck, Eye, EyeOff, Search, AlertTriangle, Sun, Moon, ZoomIn, ZoomOut, Lock, Unlock, ScatterChart, Plus, Loader2, Trash2, Library, Database, Save, Copy } from 'lucide-react';
 // The angle-region plot pop-up lives in its own module (see src/anglePlot) so
 // it can be unit-tested without React and does not bloat this file further.
 import GraphSetupWindow from './sequences/GraphSetupWindow.jsx';
@@ -256,6 +256,8 @@ const buildRayModeData = ({ baseTriangle, rayStartVertex, rayAngle, maxBounces, 
   const T0 = baseTriangle.points;
   // Collect each reflected copy in ray-traversal order.
   const triangles = [];
+  // Track the physical edge index crossed at each bounce for sequence-code derivation.
+  const reflectionEdges = [];
   // Anchor the ray at the selected physical vertex.
   const O = { ...T0[rayStartVertex] };
   // Convert the displayed angle to radians for trigonometry.
@@ -347,6 +349,9 @@ const buildRayModeData = ({ baseTriangle, rayStartVertex, rayAngle, maxBounces, 
     // Insert the reflected opposite vertex into its original index.
     nextTri[(bestEdge + 2) % 3] = { ...newP3 };
 
+    // Record the crossed edge index for sequence-code derivation.
+    reflectionEdges.push(bestEdge);
+
     // Add the completed reflected triangle before evaluating the terminal hit.
     triangles.push({
       id: `Ray-T${i + 1}`,
@@ -366,9 +371,10 @@ const buildRayModeData = ({ baseTriangle, rayStartVertex, rayAngle, maxBounces, 
   // Use the viewport scale for a ray that has not yet intersected an edge.
   const finalT = currentRayT === 0 ? Math.max(svgSize.width, svgSize.height) / zoom : currentRayT;
 
-  // Return both the reflected chain and the visible ray segment.
+  // Return the reflected chain, edge sequence, and the visible ray segment.
   return {
     triangles,
+    reflectionEdges,
     rayLine: { x1: O.x, y1: O.y, x2: O.x + finalT * D.x, y2: O.y + finalT * D.y }
   };
 };
@@ -499,6 +505,73 @@ const getOtherVertexOnEdge = (edge, vertexIdx) => {
   if (firstVertexIdx === vertexIdx) return secondVertexIdx;
   if (secondVertexIdx === vertexIdx) return firstVertexIdx;
   return null;
+};
+
+/**
+ * Derives the billiard sequence code from a list of crossed edge indices.
+ *
+ * Uses the same initial state and fan-run convention as unfoldCodeData:
+ * previousEdge = 0 (AB), fanVertexIdx = 1 (B / symbol y). Each consecutive
+ * run of reflections about the same fan vertex produces one integer in the
+ * code; fan transitions happen when the crossed edge is no longer incident
+ * to the current fan vertex's expected next edge.
+ */
+const deriveSequenceCodeFromEdges = (reflectionEdges) => {
+  if (!reflectionEdges || reflectionEdges.length === 0) {
+    return { sequenceCode: '', parsedSequence: [] };
+  }
+
+  const { idxToAngle } = getCodeModeAngleMaps();
+  const parsedSequence = [];
+
+  // Same initial state as unfoldCodeData: start in the AB/BC wedge.
+  let previousEdge = 0;
+  let fanVertexIdx = 1;
+  let currentCount = 0;
+
+  for (let i = 0; i < reflectionEdges.length; i++) {
+    const edge = reflectionEdges[i];
+
+    // The expected next edge within this fan: the incident edge that is NOT previousEdge.
+    const incidentEdges = getEdgesForAngle(fanVertexIdx);
+    const expectedEdge = incidentEdges[0] === previousEdge ? incidentEdges[1] : incidentEdges[0];
+
+    if (edge === expectedEdge) {
+      // This edge continues the current fan run.
+      currentCount++;
+      previousEdge = edge;
+    } else {
+      // Close the current fan run (if any) and transition to a new fan center.
+      if (currentCount > 0) {
+        parsedSequence.push({ count: currentCount, angle: idxToAngle[fanVertexIdx] });
+      }
+
+      // Transition: the next fan center is the other endpoint of the last crossed edge.
+      fanVertexIdx = getOtherVertexOnEdge(previousEdge, fanVertexIdx);
+      if (fanVertexIdx === null) break;
+
+      // Check if this edge matches the new fan's expected first edge.
+      const newIncidentEdges = getEdgesForAngle(fanVertexIdx);
+      const newExpectedEdge = newIncidentEdges[0] === previousEdge ? newIncidentEdges[1] : newIncidentEdges[0];
+
+      if (edge === newExpectedEdge) {
+        currentCount = 1;
+        previousEdge = edge;
+      } else {
+        // The edge does not match any expected fan — stop gracefully.
+        break;
+      }
+    }
+  }
+
+  // Close the final fan run.
+  if (currentCount > 0) {
+    parsedSequence.push({ count: currentCount, angle: idxToAngle[fanVertexIdx] });
+  }
+
+  // Build the space-separated integer code string.
+  const sequenceCode = parsedSequence.map(s => s.count).join(' ');
+  return { sequenceCode, parsedSequence };
 };
 
 /** Parses and unfolds the integer code against a supplied base triangle. */
@@ -2513,6 +2586,9 @@ export default function App() {
   const rayStartVertex = 0;
   // Ray-mode angle is stored in degrees because that is what the UI exposes.
   const [rayAngle, setRayAngle] = useState(() => restoredWorkspace?.rayAngle ?? 60);
+  // Base geometry angles for Trace Ray mode
+  const [rayAngleA, setRayAngleA] = useState(() => restoredWorkspace?.rayAngleA ?? 15);
+  const [rayAngleB, setRayAngleB] = useState(() => restoredWorkspace?.rayAngleB ?? 50);
   // Ray-mode bounce limit prevents accidental infinite or huge unfoldings.
   const [maxBounces, setMaxBounces] = useState(() => restoredWorkspace?.maxBounces ?? 15);
 
@@ -2551,10 +2627,10 @@ export default function App() {
   // validators, findStableRegion, etc.) keeps working unchanged against
   // this same {a, b, length} shape.
   const angleParams = useMemo(() => ({
-    a: activeSequence?.angleA ?? 15,
-    b: activeSequence?.angleB ?? 50,
+    a: simulatorMode === 'ray' ? rayAngleA : (activeSequence?.angleA ?? 15),
+    b: simulatorMode === 'ray' ? rayAngleB : (activeSequence?.angleB ?? 50),
     length: baseTriangleLength,
-  }), [activeSequence, baseTriangleLength]);
+  }), [simulatorMode, rayAngleA, rayAngleB, activeSequence, baseTriangleLength]);
   // Space-separated integer blocks are parsed into symbolic angle runs.
   // Kept as a read-only alias (instead of renaming every downstream use)
   // so the rest of this file's geometry/validation logic, which predates
@@ -2696,6 +2772,8 @@ export default function App() {
     angleStepControlIncrementInput,
     baseCoordsInput,
     rayAngle,
+    rayAngleA,
+    rayAngleB,
     maxBounces,
     sequences,
     nextSequenceNumber: nextSequenceNumberRef.current,
@@ -2741,7 +2819,7 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     theme, isSidebarVisible, simulatorMode, baseInputMode, baseTriangleLength,
-    angleStepControlIncrementInput, baseCoordsInput, rayAngle, maxBounces,
+    angleStepControlIncrementInput, baseCoordsInput, rayAngle, rayAngleA, rayAngleB, maxBounces,
     sequences, activeSequenceId, shotEditMode, clearanceEpsilonInput, showAllLabels,
     displayPrecisionInput, pan, zoom, isZoomLocked, zoomMagnification,
   ]);
@@ -2855,10 +2933,10 @@ export default function App() {
 
   const rayData = useMemo(() => {
     // In code mode, skip all ray calculations and expose a harmless empty result.
-    if (simulatorMode !== 'ray') return { triangles: [], rayLine: null };
+    if (simulatorMode !== 'ray') return { triangles: [], rayLine: null, reflectionEdges: [], sequenceCode: '', parsedSequence: [] };
 
     // Delegate the pure ray-unfolding calculation to the testable helper.
-    return buildRayModeData({
+    const data = buildRayModeData({
       baseTriangle,
       rayStartVertex,
       rayAngle,
@@ -2866,6 +2944,9 @@ export default function App() {
       svgSize,
       zoom
     });
+    // Derive the equivalent billiard sequence code from the crossed edges.
+    const { sequenceCode, parsedSequence } = deriveSequenceCodeFromEdges(data.reflectionEdges);
+    return { ...data, sequenceCode, parsedSequence };
   }, [simulatorMode, baseTriangle, rayStartVertex, rayAngle, maxBounces, svgSize, zoom]);
 
 
@@ -3122,6 +3203,9 @@ export default function App() {
     clearShotFeedback();
     if (field === 'length') {
       setBaseTriangleLength(value);
+    } else if (simulatorMode === 'ray') {
+      if (field === 'a') setRayAngleA(value);
+      if (field === 'b') setRayAngleB(value);
     } else {
       // Angle A/B belong to the active row only; every other row is untouched.
       const rowField = field === 'a' ? 'angleA' : 'angleB';
@@ -3893,6 +3977,32 @@ export default function App() {
               </div>
             ) : (
               <div className="space-y-2.5">
+                {simulatorMode === 'ray' && (
+                  <>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] font-bold text-slate-500 w-16 text-right mr-1">Angle A</span>
+                      <input
+                        type="number"
+                        step="any"
+                        value={angleParams.a}
+                        onChange={e => handleAngleParamChange('a', e.target.value)}
+                        placeholder="Angle A"
+                        className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2.5 py-1.5 text-sm focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 placeholder:text-slate-600 transition-all"
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] font-bold text-slate-500 w-16 text-right mr-1">Angle B</span>
+                      <input
+                        type="number"
+                        step="any"
+                        value={angleParams.b}
+                        onChange={e => handleAngleParamChange('b', e.target.value)}
+                        placeholder="Angle B"
+                        className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2.5 py-1.5 text-sm focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 placeholder:text-slate-600 transition-all"
+                      />
+                    </div>
+                  </>
+                )}
                 {/* Angle A, Angle B, Angle Step, and Plot Valid Angle Region
                     now live on each graph's own card (Sequence Parser list
                     below) so every graph keeps fully independent values —
@@ -3946,6 +4056,7 @@ export default function App() {
 
           {/* SIMULATOR PARAMETERS */}
           {simulatorMode === 'ray' ? (
+            <>
             <div className="p-4 bg-[#151c24] m-3 rounded-lg shadow-[0_8px_28px_rgba(0,0,0,0.28)] border border-white/10">
               <h2 className="text-xs uppercase tracking-wider font-bold text-amber-200 mb-4 flex items-center gap-1.5">
                 <Zap className="w-3.5 h-3.5" /> Simulation Rules
@@ -3964,6 +4075,42 @@ export default function App() {
                 </div>
               </div>
             </div>
+
+            {/* GENERATED SEQUENCE CODE (Ray Mode Only) */}
+            {rayData.reflectionEdges.length > 0 && (
+              <div className="mb-3 bg-[#151c24] p-4 mx-3 rounded-lg border border-white/10 shadow-[0_8px_28px_rgba(0,0,0,0.22)]">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-[10px] uppercase tracking-wider font-bold text-amber-200 flex items-center gap-1.5">
+                    <Code2 className="w-3 h-3" /> Generated Sequence Code
+                  </h3>
+                  <button
+                    onClick={() => navigator.clipboard.writeText(rayData.sequenceCode)}
+                    title="Copy sequence code to clipboard"
+                    className="text-[10px] font-bold text-slate-500 hover:text-amber-200 transition-colors flex items-center gap-1"
+                  >
+                    <Copy className="w-3 h-3" /> Copy
+                  </button>
+                </div>
+                <div className="bg-[#0b1016] p-2.5 rounded-md border border-white/10 font-mono text-sm text-slate-100 break-words leading-relaxed shadow-inner select-all">
+                  {rayData.sequenceCode || '(no valid code)'}
+                </div>
+                {rayData.parsedSequence.length > 0 && (
+                  <>
+                    <h3 className="text-[10px] uppercase tracking-wider font-bold text-slate-400 mt-4 mb-2 flex items-center gap-1.5">
+                      <ChevronRight className="w-3 h-3" /> Unfolded Sequence
+                    </h3>
+                    <div className="bg-[#0b1016] p-2 rounded-md border border-white/10 max-h-24 overflow-y-auto flex flex-wrap gap-1.5 custom-scrollbar shadow-inner">
+                      {rayData.parsedSequence.map((step, idx) => (
+                        <span key={idx} className="bg-[#17212b] text-slate-200 text-[10px] font-mono px-1.5 py-0.5 rounded border border-white/10 shadow-sm flex items-center">
+                          {step.count}<span className="text-amber-300 font-bold ml-0.5">{step.angle}</span>
+                        </span>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+            </>
           ) : (
             <div className="p-4 bg-[#151c24] m-3 rounded-lg shadow-[0_8px_28px_rgba(0,0,0,0.28)] border border-white/10">
               <div className="flex items-center justify-between mb-2">
