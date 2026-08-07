@@ -2616,7 +2616,7 @@ export default function App() {
   // choice. Max Bounces stays a single shared safety cap (like Base Length)
   // rather than a per-row value, since it bounds computation rather than
   // describing any one graph's own shot.
-  const [maxBounces, setMaxBounces] = useState(() => restoredWorkspace?.maxBounces ?? 15);
+  const [maxBounces, setMaxBounces] = useState(() => restoredWorkspace?.maxBounces ?? 300);
 
   // --- CODE UNFOLDER SPECIFIC STATE ---
   // Desmos-style sequence list: each row is one independent bounce-code
@@ -2933,6 +2933,15 @@ export default function App() {
     if (!Number.isFinite(value)) return String(value);
     // Use the current user-selected decimal count for ordinary scalar readouts.
     return value.toFixed(displayPrecision);
+  };
+
+  // Global Angle and Trace Ray Angle specifically: a whole-number angle
+  // (typed as plain "3", or landing on exactly 3.0 after computation) shows
+  // as "3.0", not the full displayPrecision run of trailing zeros — every
+  // other numeric readout keeps using formatFixed's full precision.
+  const formatAngleDisplay = (value) => {
+    if (!Number.isFinite(value)) return String(value);
+    return Number.isInteger(value) ? value.toFixed(1) : formatFixed(value);
   };
 
   const formatExponential = (value) => {
@@ -4394,7 +4403,7 @@ export default function App() {
                             type="number"
                             step={angleInputStep}
                             readOnly={anglesIncomplete || isRowCodeDriven}
-                            value={showComputedRayAngle ? formatFixed(rowGlobalAngle) : row.draftRayAngleInput}
+                            value={showComputedRayAngle ? formatAngleDisplay(rowGlobalAngle) : row.draftRayAngleInput}
                             onChange={e => handleRayAngleDraftChange(row.id, e.target.value)}
                             onFocus={() => { handleSelectActiveSequence(row.id); setFocusedRayAngleRowId(row.id); }}
                             onBlur={() => { handleApplyRayAngleDraft(row.id); setFocusedRayAngleRowId(null); }}
@@ -4580,7 +4589,7 @@ export default function App() {
                   <div className="flex justify-between items-center">
                     <span className="text-[11px] text-slate-500 font-medium">Global Angle <span className="font-mono text-[9px] text-slate-600 ml-1">atan2</span></span>
                     <span className="text-xs font-mono text-cyan-100 font-bold bg-cyan-400/10 px-2 py-0.5 rounded border border-cyan-300/20 text-right break-all max-w-[210px]">
-                      {formatFixed(getGlobalAngle(startShot, renderedFinalShot))}&deg;
+                      {formatAngleDisplay(getGlobalAngle(startShot, renderedFinalShot))}&deg;
                     </span>
                   </div>
                 </div>
