@@ -4357,11 +4357,12 @@ export default function App() {
                         <div className="relative flex-1">
                           <input
                             type="number"
-                            step="any"
+                            step={angleInputStep}
                             readOnly={anglesIncomplete}
                             value={row.draftRayAngleInput}
                             onChange={e => handleRayAngleDraftChange(row.id, e.target.value)}
                             onFocus={() => handleSelectActiveSequence(row.id)}
+                            onBlur={() => handleApplyRayAngleDraft(row.id)}
                             onKeyDown={e => {
                               e.stopPropagation();
                               if (anglesIncomplete) { e.preventDefault(); return; }
