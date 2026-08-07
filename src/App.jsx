@@ -2992,8 +2992,6 @@ export default function App() {
   const shotSymbol = shotGeometry.shotSymbol;
   // Keep the first endpoint available to the SVG shot line.
   const startShot = shotGeometry.startShot;
-  // Keep the final endpoint available to the SVG shot line.
-  const finalShot = shotGeometry.finalShot;
   // Keep line length available for text and degenerate guards.
   const lineLength = shotGeometry.lineLength;
   // Preview mode unconstraineding activates only for an invalid code-mode shot.
@@ -3001,8 +2999,18 @@ export default function App() {
   // Unconstrained-mode shots keep the base guide color when valid and switch to a lighter red when invalid.
   const shotLineVisualColor = isUnconstrainedShot && shotClearanceValidation.status === 'invalid' ? INVALID_SHOT_COLOR : VALID_SHOT_COLOR;
 
-  // Render the full reflected chain, including the triangle containing the final shot endpoint.
+  // Render the reflected chain minus its very last triangle (per instructor
+  // requirement — see getRenderableActiveTriangles).
   const renderableActiveTriangles = getRenderableActiveTriangles(activeTriangles);
+  // The dashed shot line/dot and its "Shot Vector" readout must always land
+  // on a vertex of a triangle that is actually drawn, so they read from the
+  // trimmed chain here — deliberately separate from shotGeometry.finalShot,
+  // which the blue/black line validator (and its endpoint-exclusion check)
+  // must keep reading from the full untrimmed chain regardless of what's
+  // currently visible on screen.
+  const renderedFinalShot = renderableActiveTriangles.length > 0
+    ? renderableActiveTriangles[renderableActiveTriangles.length - 1].points[shotGeometry.shotVertexIdx]
+    : startShot;
 
   const getTriangleRenderStyle = (tri) => ({
     color: tri.color,
@@ -4547,13 +4555,13 @@ export default function App() {
                   <div className="flex justify-between items-center border-b border-white/10 pb-2">
                     <span className="text-[11px] text-slate-500 font-medium">Final endpoint</span>
                     <span className="text-xs font-mono text-slate-100 font-semibold bg-[#0b1016] px-2 py-0.5 rounded border border-white/10 text-right break-all max-w-[210px]">
-                      {formatPoint(finalShot)}
+                      {formatPoint(renderedFinalShot)}
                     </span>
                   </div>
                   <div className="flex justify-between items-center">
                     <span className="text-[11px] text-slate-500 font-medium">Global Angle <span className="font-mono text-[9px] text-slate-600 ml-1">atan2</span></span>
                     <span className="text-xs font-mono text-cyan-100 font-bold bg-cyan-400/10 px-2 py-0.5 rounded border border-cyan-300/20 text-right break-all max-w-[210px]">
-                      {formatFixed(getGlobalAngle(startShot, finalShot))}&deg;
+                      {formatFixed(getGlobalAngle(startShot, renderedFinalShot))}&deg;
                     </span>
                   </div>
                 </div>
@@ -4788,11 +4796,11 @@ export default function App() {
                 <g pointerEvents="none">
                   <line
                     x1={startShot.x} y1={startShot.y}
-                    x2={finalShot.x} y2={finalShot.y}
+                    x2={renderedFinalShot.x} y2={renderedFinalShot.y}
                     stroke={shotLineVisualColor} strokeWidth={2.5 / zoom} strokeDasharray={`${8 / zoom},${8 / zoom}`} strokeLinecap="round" opacity={isUnconstrainedShot ? 0.9 : 1}
                   />
                   <circle cx={startShot.x} cy={startShot.y} r={5 / zoom} fill={SHOT_ENDPOINT_FILL_COLOR} stroke={shotLineVisualColor} strokeWidth={1.5 / zoom} />
-                  <circle cx={finalShot.x} cy={finalShot.y} r={5 / zoom} fill={SHOT_ENDPOINT_FILL_COLOR} stroke={shotLineVisualColor} strokeWidth={1.5 / zoom} />
+                  <circle cx={renderedFinalShot.x} cy={renderedFinalShot.y} r={5 / zoom} fill={SHOT_ENDPOINT_FILL_COLOR} stroke={shotLineVisualColor} strokeWidth={1.5 / zoom} />
                 </g>
               )}
             </g>
