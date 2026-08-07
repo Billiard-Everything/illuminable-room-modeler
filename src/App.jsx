@@ -37,6 +37,7 @@ import { RENDER_DEBOUNCE_MS, MAX_BACKGROUND_EXACT_RENDER_MS } from './anglePlot/
 import { truncateSequenceText } from './sequences/sequenceGraphConfig.js';
 import { graphCache, buildGraphCacheKey } from './anglePlot/graphCache.js';
 import { hashGraph, GRAPH_HASH_ALGORITHM_VERSION } from './anglePlot/graphHasher.js';
+import { calculateTheta, formatTheta } from './anglePlot/theta.js';
 import { fetchRemoteExactGraph, uploadRemoteExactGraph } from './anglePlot/remoteGraphRepository.js';
 import { fetchLocalExactGraph, saveLocalExactGraph } from './anglePlot/localGraphDatabaseClient.js';
 import { requestExactComputation, isExactComputationRunning, updateBackgroundJobPriority, getBackgroundJobState, JOB_PRIORITY } from "./anglePlot/backgroundExactWorker.js";
@@ -4488,6 +4489,19 @@ export default function App() {
                           </div>
                         </>
                       )}
+                      {/* Theta: this row's own symbolic angle equation,
+                          reusing the exact same X/Y/Z classification as
+                          Code Seq./Side Seq. above (codeDataByRowId's own
+                          parsedSequence — never a separately-guessed
+                          classification) with alternating signs applied by
+                          position (see theta.js). Always shown, unlike
+                          Code Seq./Side Seq./Unfolded Sequence, since an
+                          invalid/empty code still has a well-defined
+                          "θ = —" per this feature's own requirement. */}
+                      <span className="mt-1 block text-[10px] font-bold text-slate-500">Theta</span>
+                      <div className="bg-[#080b0f] border border-white/10 rounded px-2 py-1 text-[11px] font-mono text-slate-200">
+                        {formatTheta(calculateTheta(codeDataByRowId[row.id]?.parsedSequence))}
+                      </div>
                       {/* Per-graph "Plot Valid Angle Region": validates and
                           calculates only this graph, on the same shared
                           coordinate system as every other graph — see
@@ -4745,6 +4759,13 @@ export default function App() {
                       it still feeds haveSameSideSequence's path-equality
                       checks, which must keep comparing the full path. */}
                   {codeData.sideSequence?.slice(0, -1).join('')}
+                </div>
+
+                <h3 className="text-[10px] uppercase tracking-wider font-bold text-slate-400 mt-4 mb-2 flex items-center gap-1.5">
+                  <ChevronRight className="w-3 h-3" /> Theta
+                </h3>
+                <div className="bg-[#0b1016] p-2.5 rounded-md border border-white/10 font-mono text-sm text-slate-100">
+                  {formatTheta(calculateTheta(codeData.parsedSequence))}
                 </div>
               </div>
             )}
