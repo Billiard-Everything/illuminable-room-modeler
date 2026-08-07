@@ -18,6 +18,9 @@ globalThis.__unfolderMathApi = {
   buildCodePathReference,
   buildFanConstraintValidation,
   buildPoolshotTowerValidation,
+  // Resolves which of a graph's two alternate shot inputs (typed code vs.
+  // Trajectory Angle) actually drives it — see App.jsx's own doc comment.
+  deriveEffectiveSequenceCode,
   findStableRegion,
   getAngleAtVertex,
   getGlobalAngle,
@@ -200,6 +203,33 @@ test('rendering drops the very last reflected triangle per instructor requiremen
   assert.equal(renderableTriangles.length, codeData.parsedSequence.reduce((total, step) => total + step.count, 0) - 1);
   assert.strictEqual(renderableTriangles.at(-1), codeData.triangles.at(-2));
   assert.equal(renderableTriangles.at(-1).id, 'Code-T36');
+});
+
+test('deriveEffectiveSequenceCode: a non-blank typed code always wins over a Trajectory Angle', () => {
+  const baseTriangle = api.buildBaseTriangle('angles', [], DEFAULT_ANGLE_PARAMS);
+  const effective = api.deriveEffectiveSequenceCode(DEFAULT_CODE, '999', baseTriangle, 15);
+  assert.equal(effective, DEFAULT_CODE);
+});
+
+test('deriveEffectiveSequenceCode: a blank code falls back to tracing the Trajectory Angle', () => {
+  const baseTriangle = api.buildBaseTriangle('angles', [], DEFAULT_ANGLE_PARAMS);
+  // Same displayed default-code shot angle used elsewhere in this suite —
+  // tracing it should reproduce the exact same code the default text is.
+  const effective = api.deriveEffectiveSequenceCode('', '3.105204803654', baseTriangle, 50);
+  assert.equal(effective, DEFAULT_CODE);
+});
+
+test('deriveEffectiveSequenceCode: whitespace-only code is treated as blank, still falls back to the angle', () => {
+  const baseTriangle = api.buildBaseTriangle('angles', [], DEFAULT_ANGLE_PARAMS);
+  const effective = api.deriveEffectiveSequenceCode('   ', '3.105204803654', baseTriangle, 50);
+  assert.equal(effective, DEFAULT_CODE);
+});
+
+test('deriveEffectiveSequenceCode: neither code nor a parseable angle resolves to empty', () => {
+  const baseTriangle = api.buildBaseTriangle('angles', [], DEFAULT_ANGLE_PARAMS);
+  assert.equal(api.deriveEffectiveSequenceCode('', '', baseTriangle, 15), '');
+  assert.equal(api.deriveEffectiveSequenceCode('', 'not-a-number', baseTriangle, 15), '');
+  assert.equal(api.deriveEffectiveSequenceCode(null, undefined, baseTriangle, 15), '');
 });
 
 test('ray mode keeps the terminal reflected triangle when the path ends at the origin after the last bounce', () => {
