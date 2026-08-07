@@ -1,7 +1,7 @@
 // React supplies state, refs, effects, and memoization for this client-only tool.
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 // Lucide supplies recognizable control/status icons without custom SVG code.
-import { Maximize, RotateCcw, Zap, Settings2, Code2, Compass, ChevronRight, ChevronLeft, Activity, CheckCircle2, XCircle, ShieldCheck, Eye, EyeOff, Search, AlertTriangle, Sun, Moon, ZoomIn, ZoomOut, Lock, Unlock, ScatterChart, Plus, Loader2, Trash2, Library, Database, Save, Copy } from 'lucide-react';
+import { Maximize, RotateCcw, Zap, Settings2, Code2, Compass, ChevronRight, ChevronLeft, Activity, CheckCircle2, XCircle, ShieldCheck, Eye, EyeOff, Search, AlertTriangle, Sun, Moon, ZoomIn, ZoomOut, Lock, Unlock, ScatterChart, Plus, Loader2, Trash2, Library, Database, Save, Copy, RefreshCw } from 'lucide-react';
 // The angle-region plot pop-up lives in its own module (see src/anglePlot) so
 // it can be unit-tested without React and does not bloat this file further.
 import GraphSetupWindow from './sequences/GraphSetupWindow.jsx';
@@ -1726,7 +1726,7 @@ const jobPriorityForSequence = (seq, activeSequenceId, everRequestedIds) => {
 const GraphSimulatorView = ({
   sequences, activeSequenceId, angleParams, baseLength, buildValidateCandidateForSequence, refreshToken,
   onRowStatusChange, forceGenerateRequest, maxBounces,
-  onShowAllGraphs, onHideAllGraphs, onToggleSequenceVisible,
+  onShowAllGraphs, onHideAllGraphs, onToggleSequenceVisible, onSequenceColorChange, onRefreshVisible,
   initialIsViewLocked, initialLegendCollapsed,
   initialPanelZoom, initialPanelPan,
   onWorkspaceStateChange
@@ -2472,6 +2472,15 @@ const GraphSimulatorView = ({
             {isViewLocked ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
             <span className="text-[10px] font-bold">{isViewLocked ? 'Unlock View' : 'Lock View'}</span>
           </button>
+          <button
+            type="button"
+            onClick={onRefreshVisible}
+            className="px-2.5 py-2 transition-colors flex items-center gap-1.5 border-l border-white/10 hover:bg-[#172230] text-slate-300 hover:text-cyan-200"
+            title="Replot every visible graph now — fast adaptive preview first, brute-force exact result following, in case a plot isn't showing for some reason"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span className="text-[10px] font-bold">Refresh</span>
+          </button>
         </div>
       </div>
 
@@ -2529,7 +2538,16 @@ const GraphSimulatorView = ({
                   title={seq.visible ? `Hide ${seq.label} from the graph` : `Show ${seq.label} in the graph`}
                   className="w-3.5 h-3.5 shrink-0 accent-cyan-400 cursor-pointer"
                 />
-                <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: seq.color, opacity: seq.visible ? 1 : 0.5 }} />
+                <input
+                  type="color"
+                  value={seq.color}
+                  onChange={(e) => onSequenceColorChange?.(seq.id, e.target.value)}
+                  onClick={(e) => e.stopPropagation()}
+                  aria-label={`${seq.label} graph color`}
+                  title={`Choose ${seq.label}'s dot/legend color`}
+                  style={{ opacity: seq.visible ? 1 : 0.5 }}
+                  className="w-3 h-3 shrink-0 rounded-full border border-black/30 p-0 bg-transparent cursor-pointer appearance-none overflow-hidden"
+                />
                 <span className="font-bold shrink-0">{seq.label}{seq.id === activeSequenceId ? ' •' : ''}</span>
                 <span className={seq.visible ? 'text-slate-400' : 'text-slate-500'}>&ldquo;{truncateSequenceText(seq.sequenceText, 16)}&rdquo;</span>
                 <span className={seq.visible ? 'text-slate-400' : 'text-slate-500'}>step {seq.angleStepInput}</span>
@@ -2618,6 +2636,12 @@ export default function App() {
   // rather than a per-row value, since it bounds computation rather than
   // describing any one graph's own shot.
   const [maxBounces, setMaxBounces] = useState(() => restoredWorkspace?.maxBounces ?? 300);
+  // Bumped by the Graph Plot toolbar's own "Refresh" button — GraphSimulatorView
+  // treats any change to this as "replot every currently visible graph now"
+  // (see its own refreshToken effect), exactly like its Generate/Refresh
+  // Plot button always could; this just exposes that existing mechanism
+  // through a visible button instead of leaving refreshToken permanently at 0.
+  const [graphPlotRefreshToken, setGraphPlotRefreshToken] = useState(0);
 
   // --- CODE UNFOLDER SPECIFIC STATE ---
   // Desmos-style sequence list: each row is one independent bounce-code
@@ -4224,7 +4248,7 @@ export default function App() {
                       tabIndex={0}
                       onKeyDown={e => { if (e.target !== e.currentTarget) return; if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSelectActiveSequence(row.id); } }}
                       title={row.sequenceText ? `${row.label}: ${row.sequenceText}` : `${row.label}: (empty sequence)`}
-                      className={`rounded-md border px-2 py-1.5 cursor-pointer transition-colors ${isActive ? 'border-cyan-300/50 bg-cyan-400/10' : 'border-white/10 bg-[#0b1016]'}`}
+                      className={`rounded-md border px-2 py-1.5 cursor-pointer transition-colors ${isActive ? 'border-amber-400/60 bg-amber-500/20' : 'border-white/10 bg-[#0b1016]'}`}
                     >
                       <div className="flex items-center gap-1.5">
                         <span
@@ -4429,10 +4453,15 @@ export default function App() {
                           computed against this row's own Angle A/B/length
                           (see codeDataByRowId) instead of the shared/active
                           triangle. Hidden until there's a real sequence to
-                          report against a valid triangle. */}
+                          report against a valid triangle. The trailing
+                          entry is dropped for the same reason the active
+                          row's own Sequence Logs panel drops it (the
+                          unfolded path's last landing is a vertex, not a
+                          genuine side crossing) — must always match that
+                          panel's own count exactly for the same graph. */}
                       {codeDataByRowId[row.id]?.sideSequence?.length > 0 && (
                         <div className="mt-1 bg-[#080b0f] border border-white/10 rounded px-2 py-1 text-[10px] font-mono text-slate-400 tracking-widest break-words">
-                          {codeDataByRowId[row.id].sideSequence.join('')}
+                          {codeDataByRowId[row.id].sideSequence.slice(0, -1).join('')}
                         </div>
                       )}
                       {/* Per-graph "Plot Valid Angle Region": validates and
@@ -4715,13 +4744,15 @@ export default function App() {
             angleParams={angleParams}
             baseLength={Number(angleParams.length) || 0}
             buildValidateCandidateForSequence={buildValidateCandidateForSequence}
-            refreshToken={0}
+            refreshToken={graphPlotRefreshToken}
             onRowStatusChange={(id, info) => setPlotStatusById(prev => ({ ...prev, [id]: info }))}
             forceGenerateRequest={forceGenerateRequest}
             maxBounces={maxBounces}
             onShowAllGraphs={() => setSequences(rows => rows.map(r => ({ ...r, visible: true })))}
             onHideAllGraphs={() => setSequences(rows => rows.map(r => ({ ...r, visible: false })))}
             onToggleSequenceVisible={handleToggleSequenceVisible}
+            onSequenceColorChange={handleSequenceColorChange}
+            onRefreshVisible={() => setGraphPlotRefreshToken((t) => t + 1)}
             initialIsViewLocked={restoredWorkspace?.anglePlotWindow?.isViewLocked}
             initialLegendCollapsed={restoredWorkspace?.anglePlotWindow?.legendCollapsed}
             initialPanelZoom={restoredWorkspace?.anglePlotWindow?.panelZoom}
@@ -4734,6 +4765,15 @@ export default function App() {
         <div style={{ display: simulatorMode !== 'graph' ? 'block' : 'none' }}
              className="w-full h-full">
         <div className="absolute top-4 right-4 z-10 flex gap-2">
+           {activeSequence && (
+             <div
+               className="bg-[#101820]/95 text-slate-400 px-3 py-2 text-[11px] rounded-md shadow-[0_8px_24px_rgba(0,0,0,0.32)] border border-white/10 font-mono font-bold flex items-center gap-2 backdrop-blur"
+               title="The graph currently drawn on this canvas"
+             >
+               <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: activeSequence.color }} />
+               GRAPH: <span className="text-amber-200">{activeSequence.title || activeSequence.label}</span>
+             </div>
+           )}
            {simulatorMode === 'code' && (
              <div className="bg-[#101820]/95 text-slate-400 px-3 py-2 text-[11px] rounded-md shadow-[0_8px_24px_rgba(0,0,0,0.32)] border border-white/10 font-mono font-bold flex items-center backdrop-blur">
                 GENERATED: <span className="text-cyan-200 ml-2">{renderableActiveTriangles.length}</span>

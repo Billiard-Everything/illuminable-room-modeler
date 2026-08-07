@@ -34,7 +34,9 @@ import { findPointsNearScreenPosition } from './multiSeriesHover.js';
 // A/B region is never stretched into a misleading shape), and `pan` is the
 // (A, B) point currently centered in the viewport.
 const MIN_ZOOM = 2;
-const WHEEL_ZOOM_FACTOR = 1.15;
+// Matches the main triangle canvas's own wheel-zoom factor in App.jsx, so
+// zooming feels the same on both canvases.
+const WHEEL_ZOOM_FACTOR = 1.1;
 const POINT_HIT_RADIUS_PX = 7;
 // How close two different series' points must be on screen to be treated
 // as "the same spot" for one combined hover, once the nearest point under
@@ -283,8 +285,10 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ series, currentPoint
   const toDataB = useCallback((y) => pan.b - (y - size.height / 2) / zoom, [size.height, pan.b, zoom]);
 
   // Imperative view controls used by AnglePlotWindow's Zoom In / Zoom Out /
-  // Fit / Reset View buttons. Lock View only blocks interactive mouse wheel /
-  // drag panning, while explicit toolbar buttons remain functional.
+  // Fit / Reset View buttons. Lock View only blocks interactive mouse-wheel
+  // zoom (see the wheel handler below) — drag-to-pan and every explicit
+  // toolbar button stay functional, matching the main triangle canvas's own
+  // Lock View exactly.
   useImperativeHandle(ref, () => ({
     zoomIn: () => {
       const nextZoom = clampZoom(zoom * WHEEL_ZOOM_FACTOR);
@@ -606,8 +610,9 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ series, currentPoint
 
   const handleMouseDown = (e) => {
     if (e.button !== 0) return;
-    // Locking the view disables drag-to-pan entirely.
-    if (isLocked) return;
+    // Lock View only disables wheel-zoom (see the wheel handler above),
+    // matching the main triangle canvas in App.jsx exactly — drag-to-pan
+    // and every toolbar button stay functional while locked.
     setIsDragging(true);
     dragStart.current = { x: e.clientX, y: e.clientY };
   };
@@ -692,7 +697,7 @@ const AnglePlotPanel = forwardRef(function AnglePlotPanel({ series, currentPoint
             Angle B (degrees)
           </span>
         </div>
-        <div ref={containerRef} className="relative flex-1 min-w-0 min-h-0 border border-white/10 rounded-md overflow-hidden" style={{ cursor: isLocked ? 'not-allowed' : isDragging ? 'grabbing' : 'default' }}
+        <div ref={containerRef} className="relative flex-1 min-w-0 min-h-0 border border-white/10 rounded-md overflow-hidden" style={{ cursor: isDragging ? 'grabbing' : 'grab' }}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
