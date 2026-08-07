@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { X, Database, Search, RefreshCw, Loader2, AlertTriangle, Download, Star, Trash2, Copy } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { X, Database, Search, RefreshCw, Loader2, AlertTriangle, Download, Star, Trash2, Copy, Upload, FileJson } from 'lucide-react';
 import { useLocalGraphDatabase } from './useLocalGraphDatabase.js';
 import GraphDatabaseCard from './GraphDatabaseCard.jsx';
 import { LOCAL_GRAPH_SORT, LOCAL_GRAPH_SORT_LABELS } from './localGraphDatabaseConstants.js';
@@ -38,7 +38,19 @@ export default function GraphDatabasePanel({ isOpen, onClose, onLoadGraph }) {
     loadSelectedGraph, duplicateGraph,
     savingMetadata, metadataError, renameGraph, toggleFavorite, updateTags, updateNotes,
     deleting, removeGraph,
+    exporting, exportDatabase,
+    importing, importResult, importError, importDatabase, clearImportResult,
   } = useLocalGraphDatabase({ isOpen, onLoadGraph });
+
+  // The native file picker has no React-controllable value, so "Import
+  // Database" is a plain hidden <input type="file"> triggered by a styled
+  // button click — the standard pattern for a custom-looking file upload.
+  const importFileInputRef = useRef(null);
+  const handleImportFileChosen = (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-choosing the exact same file next time
+    if (file) importDatabase(file);
+  };
 
   // Local, draft-only editing state for the detail pane's title/tags/notes
   // fields — mirrors this app's own established "draft vs. applied" pattern
@@ -126,19 +138,62 @@ export default function GraphDatabasePanel({ isOpen, onClose, onLoadGraph }) {
               <Database className="h-4 w-4" /> Graph Database
             </h2>
             <p className="mt-1 text-xs leading-relaxed text-slate-400">
-              Every graph ever permanently cached on this machine — search, sort, rename, tag, favorite, annotate, or load instantly with no recomputation.
+              Every graph ever permanently saved in this browser — search, sort, rename, tag, favorite, annotate, or load instantly with no recomputation.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close Graph Database"
-            title="Close Graph Database"
-            className="rounded-md p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-red-200"
-          >
-            <X className="h-5 w-5" />
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={exportDatabase}
+              disabled={exporting}
+              title="Download the entire Graph Database as one JSON file"
+              className="flex items-center gap-1.5 rounded-md border border-white/10 bg-[#0b1016] px-2.5 py-1.5 text-[11px] font-bold text-slate-300 transition-colors hover:bg-[#172230] disabled:opacity-40"
+            >
+              {exporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileJson className="w-3.5 h-3.5" />}
+              Export Database
+            </button>
+            <button
+              type="button"
+              onClick={() => importFileInputRef.current?.click()}
+              disabled={importing}
+              title="Import graphs from a previously exported JSON file"
+              className="flex items-center gap-1.5 rounded-md border border-white/10 bg-[#0b1016] px-2.5 py-1.5 text-[11px] font-bold text-slate-300 transition-colors hover:bg-[#172230] disabled:opacity-40"
+            >
+              {importing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
+              Import Database
+            </button>
+            <input
+              ref={importFileInputRef}
+              type="file"
+              accept=".json,application/json"
+              onChange={handleImportFileChosen}
+              className="hidden"
+              aria-label="Import Graph Database file"
+            />
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close Graph Database"
+              title="Close Graph Database"
+              className="rounded-md p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-red-200"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
         </header>
+
+        {(importResult || importError) && (
+          <div className={`flex items-center justify-between gap-3 border-b px-4 py-2 text-[11px] shrink-0 ${importError ? 'border-red-400/25 bg-red-500/10 text-red-200' : 'border-emerald-400/25 bg-emerald-500/10 text-emerald-200'}`}>
+            <span>
+              {importError ? importError : (
+                <>Imported <strong>{importResult.imported}</strong> graph{importResult.imported === 1 ? '' : 's'}, skipped <strong>{importResult.duplicates}</strong> duplicate{importResult.duplicates === 1 ? '' : 's'} — <strong>{importResult.total}</strong> graph{importResult.total === 1 ? '' : 's'} now stored.</>
+              )}
+            </span>
+            <button type="button" onClick={clearImportResult} aria-label="Dismiss" className="shrink-0 text-current opacity-70 hover:opacity-100">
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
 
         {/* Search + sort. */}
         <div className="flex flex-wrap items-center gap-2 border-b border-white/10 px-4 py-3 shrink-0">
@@ -261,6 +316,9 @@ export default function GraphDatabasePanel({ isOpen, onClose, onLoadGraph }) {
                     <div><dt className="text-slate-500">Angle B</dt><dd className="text-slate-100 font-mono">{selectedGraph.angleB}</dd></div>
                     <div><dt className="text-slate-500">Angle Step</dt><dd className="text-slate-100 font-mono">{selectedGraph.angleStep}</dd></div>
                     <div><dt className="text-slate-500">Base Length</dt><dd className="text-slate-100 font-mono">{selectedGraph.baseLength}</dd></div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div><dt className="text-slate-500">Max Bounces</dt><dd className="text-slate-100 font-mono">{selectedGraph.maxBounces ?? '—'}</dd></div>
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <div><dt className="text-slate-500">Point Count</dt><dd className="text-slate-100 font-mono">{selectedGraph.pointCount.toLocaleString()}</dd></div>

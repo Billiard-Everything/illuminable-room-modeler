@@ -10,6 +10,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   fetchLocalGraphLibraryPage, fetchLocalGraphDetails,
   updateLocalGraphMetadata, deleteLocalGraph,
+  exportLocalGraphDatabase, importLocalGraphDatabase,
 } from '../anglePlot/localGraphDatabaseClient.js';
 import { graphCache } from '../anglePlot/graphCache.js';
 import { LOCAL_GRAPH_SORT } from './localGraphDatabaseConstants.js';
@@ -55,6 +56,12 @@ export const useLocalGraphDatabase = ({ isOpen, onLoadGraph }) => {
   const [savingMetadata, setSavingMetadata] = useState(false);
   const [metadataError, setMetadataError] = useState(false);
   const [deleting, setDeleting] = useState(false);
+
+  // --- Export / Import whole-database state --------------------------------
+  const [exporting, setExporting] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState(null); // {imported, duplicates, total} | null
+  const [importError, setImportError] = useState(null); // string | null
 
   // Guards against a slow, superseded fetch overwriting a newer one's
   // results — same requestId pattern useGraphLibrary.js/AnglePlotWindow.jsx
@@ -208,6 +215,64 @@ export const useLocalGraphDatabase = ({ isOpen, onLoadGraph }) => {
     return true;
   }, [selectedGraph]);
 
+  // "Export Database": downloads the browser's entire Graph Database (every
+  // graph's full metadata + points + notes, not just what's currently
+  // displayed/filtered) as one JSON file — a plain client-side Blob
+  // download, no server round trip involved (there is no server-side
+  // storage to export from anymore; see localGraphDatabaseClient.js's own
+  // header comment on this feature's direction change).
+  const exportDatabase = useCallback(async () => {
+    setExporting(true);
+    try {
+      const data = await exportLocalGraphDatabase();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      link.href = url;
+      link.download = `graph-database-export-${stamp}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } finally {
+      setExporting(false);
+    }
+  }, []);
+
+  // "Import Database": reads a previously-exported JSON file and merges it
+  // into this browser's own database. Deduplicates by graph hash (an
+  // imported graph whose hash already exists locally is skipped, never
+  // overwritten) and preserves each imported graph's own owner/metadata
+  // exactly as exported (see browserGraphDatabaseStore.js's own
+  // importDatabase comment) — this feature's own Import requirements.
+  // Refreshes the current results page afterward so newly-imported graphs
+  // that match the active search/sort appear immediately.
+  const importDatabase = useCallback(async (file) => {
+    setImporting(true);
+    setImportError(null);
+    setImportResult(null);
+    try {
+      const text = await file.text();
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        setImportError('That file is not valid JSON.');
+        return;
+      }
+      const result = await importLocalGraphDatabase(data);
+      setImportResult(result);
+      refresh();
+    } catch {
+      setImportError("Couldn't read that file.");
+    } finally {
+      setImporting(false);
+    }
+  }, [refresh]);
+
+  const clearImportResult = useCallback(() => { setImportResult(null); setImportError(null); }, []);
+
   return {
     searchText, setSearchText,
     angleAFilter, setAngleAFilter,
@@ -220,5 +285,7 @@ export const useLocalGraphDatabase = ({ isOpen, onLoadGraph }) => {
     loadSelectedGraph, duplicateGraph,
     savingMetadata, metadataError, renameGraph, toggleFavorite, updateTags, updateNotes,
     deleting, removeGraph,
+    exporting, exportDatabase,
+    importing, importResult, importError, importDatabase, clearImportResult,
   };
 };
