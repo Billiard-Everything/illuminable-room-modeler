@@ -1725,7 +1725,7 @@ const jobPriorityForSequence = (seq, activeSequenceId, everRequestedIds) => {
 
 const GraphSimulatorView = ({
   sequences, activeSequenceId, angleParams, baseLength, buildValidateCandidateForSequence, refreshToken,
-  onRowStatusChange, forceGenerateRequest,
+  onRowStatusChange, forceGenerateRequest, maxBounces,
   onShowAllGraphs, onHideAllGraphs, onToggleSequenceVisible,
   initialIsViewLocked, initialLegendCollapsed,
   initialPanelZoom, initialPanelPan,
@@ -2161,6 +2161,7 @@ const GraphSimulatorView = ({
             saveLocalExactGraph(graphParams, GRAPH_HASH_ALGORITHM_VERSION, points, renderInfo.durationMs, {
               title: currentSeqForSave.title, graphColorHex: currentSeqForSave.color, notes: currentSeqForSave.notes,
               tags: currentSeqForSave.tags, favorite: currentSeqForSave.favorite, visibility: currentSeqForSave.visibility,
+              maxBounces,
             });
             uploadRemoteExactGraph(graphParams, GRAPH_HASH_ALGORITHM_VERSION, points, renderInfo.durationMs);
           }
@@ -3620,7 +3621,7 @@ export default function App() {
       GRAPH_HASH_ALGORITHM_VERSION,
       plotInfo.points,
       plotInfo.renderInfo?.durationMs ?? null,
-      { title: row.title, graphColorHex: row.color, notes: row.notes, tags: row.tags, favorite: row.favorite, visibility: row.visibility },
+      { title: row.title, graphColorHex: row.color, notes: row.notes, tags: row.tags, favorite: row.favorite, visibility: row.visibility, maxBounces },
     );
     setSavingGraphIds(prev => { const next = new Set(prev); next.delete(row.id); return next; });
     showSaveToast(
@@ -4431,7 +4432,7 @@ export default function App() {
                           report against a valid triangle. */}
                       {codeDataByRowId[row.id]?.sideSequence?.length > 0 && (
                         <div className="mt-1 bg-[#080b0f] border border-white/10 rounded px-2 py-1 text-[10px] font-mono text-slate-400 tracking-widest break-words">
-                          {codeDataByRowId[row.id].sideSequence.join(' ')}
+                          {codeDataByRowId[row.id].sideSequence.join('')}
                         </div>
                       )}
                       {/* Per-graph "Plot Valid Angle Region": validates and
@@ -4690,7 +4691,7 @@ export default function App() {
                       underlying codeData.sideSequence itself stays intact —
                       it still feeds haveSameSideSequence's path-equality
                       checks, which must keep comparing the full path. */}
-                  {codeData.sideSequence?.slice(0, -1).join(' ')}
+                  {codeData.sideSequence?.slice(0, -1).join('')}
                 </div>
               </div>
             )}
@@ -4717,6 +4718,7 @@ export default function App() {
             refreshToken={0}
             onRowStatusChange={(id, info) => setPlotStatusById(prev => ({ ...prev, [id]: info }))}
             forceGenerateRequest={forceGenerateRequest}
+            maxBounces={maxBounces}
             onShowAllGraphs={() => setSequences(rows => rows.map(r => ({ ...r, visible: true })))}
             onHideAllGraphs={() => setSequences(rows => rows.map(r => ({ ...r, visible: false })))}
             onToggleSequenceVisible={handleToggleSequenceVisible}
@@ -4793,7 +4795,7 @@ export default function App() {
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
-          onMouseLeave={handleMouseUp}
+          onMouseLeave={() => { handleMouseUp(); setMousePos({ x: -1000, y: -1000 }); }}
         >
           <svg width="100%" height="100%" className="block bg-[#070b10]">
             
