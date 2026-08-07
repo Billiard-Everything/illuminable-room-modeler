@@ -4447,18 +4447,35 @@ export default function App() {
                           <span className="absolute right-1.5 top-1 text-slate-500 font-mono text-[10px]">&deg;</span>
                         </div>
                       </div>
-                      {/* Boundary Intersections: this row's own side sequence,
-                          shown right below its own code sequence in the same
-                          card — mirrors the Unfold Code mode panel, but
+                      {/* Unfolded Sequence + Boundary Intersections: this
+                          row's own derived readouts, shown right below its
+                          own Code Sequence/Trace Ray Angle in the same card
+                          — mirrors the active row's Sequence Logs panel, but
                           computed against this row's own Angle A/B/length
-                          (see codeDataByRowId) instead of the shared/active
-                          triangle. Hidden until there's a real sequence to
-                          report against a valid triangle. The trailing
-                          entry is dropped for the same reason the active
-                          row's own Sequence Logs panel drops it (the
-                          unfolded path's last landing is a vertex, not a
-                          genuine side crossing) — must always match that
-                          panel's own count exactly for the same graph. */}
+                          (see codeDataByRowId) and, critically, from
+                          whichever of the two inputs is actually driving
+                          this row (deriveEffectiveSequenceCode): typing a
+                          Code Sequence shows its Unfolded Sequence here just
+                          as before, and typing a Trace Ray Angle now shows
+                          the exact same thing for the code that angle
+                          derives — both directions always show both
+                          readouts. Hidden until there's a real sequence to
+                          report against a valid triangle. */}
+                      {codeDataByRowId[row.id]?.parsedSequence?.length > 0 && (
+                        <div className="mt-1 bg-[#080b0f] border border-white/10 rounded px-2 py-1 flex flex-wrap gap-1">
+                          {codeDataByRowId[row.id].parsedSequence.map((step, idx) => (
+                            <span key={idx} className="bg-[#151c24] text-slate-200 text-[9px] font-mono px-1 py-0.5 rounded border border-white/10 flex items-center">
+                              {step.count}<span className="text-cyan-300 font-bold ml-0.5">{step.angle}</span>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {/* Boundary Intersections: the trailing entry is
+                          dropped for the same reason the active row's own
+                          Sequence Logs panel drops it (the unfolded path's
+                          last landing is a vertex, not a genuine side
+                          crossing) — must always match that panel's own
+                          count exactly for the same graph. */}
                       {codeDataByRowId[row.id]?.sideSequence?.length > 0 && (
                         <div className="mt-1 bg-[#080b0f] border border-white/10 rounded px-2 py-1 text-[10px] font-mono text-slate-400 tracking-widest break-words">
                           {codeDataByRowId[row.id].sideSequence.slice(0, -1).join('')}
