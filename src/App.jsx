@@ -1,7 +1,7 @@
 // React supplies state, refs, effects, and memoization for this client-only tool.
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 // Lucide supplies recognizable control/status icons without custom SVG code.
-import { Maximize, RotateCcw, Zap, Settings2, List, Code2, Compass, ChevronRight, ChevronLeft, Activity, CheckCircle2, XCircle, ShieldCheck, Eye, EyeOff, Search, AlertTriangle, Sun, Moon, ZoomIn, ZoomOut, Lock, Unlock, ScatterChart, Plus, Loader2, Trash2, Library, Database, Save, Copy } from 'lucide-react';
+import { Maximize, RotateCcw, Zap, Settings2, Code2, Compass, ChevronRight, ChevronLeft, Activity, CheckCircle2, XCircle, ShieldCheck, Eye, EyeOff, Search, AlertTriangle, Sun, Moon, ZoomIn, ZoomOut, Lock, Unlock, ScatterChart, Plus, Loader2, Trash2, Library, Database, Save, Copy } from 'lucide-react';
 // The angle-region plot pop-up lives in its own module (see src/anglePlot) so
 // it can be unit-tested without React and does not bloat this file further.
 import GraphSetupWindow from './sequences/GraphSetupWindow.jsx';
@@ -2955,6 +2955,21 @@ export default function App() {
     return unfoldCodeData(billiardsCode, baseTriangle, simulatorMode === 'code');
   }, [simulatorMode, billiardsCode, baseTriangle]);
 
+  // Each Sequence Parser card shows its own Boundary Intersections readout
+  // below its own code sequence, computed against that row's own committed
+  // Angle A/B (not the shared angleParams/baseTriangle above, which only
+  // ever reflects the single active row in 'code' mode).
+  const codeDataByRowId = useMemo(() => {
+    const map = {};
+    for (const row of sequences) {
+      const params = { a: row.angleA, b: row.angleB, length: baseTriangleLength };
+      map[row.id] = (row.sequenceText.trim() && hasCompleteAngleParams(params) && hasValidAngleTriangle(params))
+        ? unfoldCodeData(row.sequenceText, buildBaseTriangle('angles', baseCoordsInput, params), true)
+        : null;
+    }
+    return map;
+  }, [sequences, baseCoordsInput, baseTriangleLength]);
+
 
   // --- GEOMETRY ROUTER ---
   // Pick the triangle chain produced by the currently selected mode.
@@ -4373,6 +4388,18 @@ export default function App() {
                         title={anglesIncomplete ? `Set ${row.label}'s Angle A and Angle B above before entering a code.` : 'Type freely, including spaces. Press Enter to apply, Escape to discard the edit.'}
                         className={`mt-1.5 w-full bg-[#080b0f] border rounded px-2 py-1 text-[11px] font-mono outline-none placeholder:text-slate-600 ${anglesIncomplete ? 'border-white/5 text-slate-600 cursor-not-allowed' : 'border-white/10 text-slate-100 focus:border-cyan-300/50'}`}
                       />
+                      {/* Boundary Intersections: this row's own side sequence,
+                          shown right below its own code sequence in the same
+                          card — mirrors the Unfold Code mode panel, but
+                          computed against this row's own Angle A/B/length
+                          (see codeDataByRowId) instead of the shared/active
+                          triangle. Hidden until there's a real sequence to
+                          report against a valid triangle. */}
+                      {codeDataByRowId[row.id]?.sideSequence?.length > 0 && (
+                        <div className="mt-1 bg-[#080b0f] border border-white/10 rounded px-2 py-1 text-[10px] font-mono text-slate-400 tracking-widest break-words">
+                          {codeDataByRowId[row.id].sideSequence.join(' ')}
+                        </div>
+                      )}
                       {/* Per-graph "Plot Valid Angle Region": validates and
                           calculates only this graph, on the same shared
                           coordinate system as every other graph — see
@@ -4607,42 +4634,6 @@ export default function App() {
                       it still feeds haveSameSideSequence's path-equality
                       checks, which must keep comparing the full path. */}
                   {codeData.sideSequence?.slice(0, -1).join(' ')}
-                </div>
-              </div>
-            )}
-
-            {/* VERTEX LOGS */}
-            {simulatorMode !== 'graph' && (
-              <div className="bg-[#151c24] p-4 rounded-lg border border-white/10 shadow-[0_8px_28px_rgba(0,0,0,0.22)]">
-                <div className="flex items-center justify-between mb-3 border-b border-white/10 pb-2">
-                  <h2 className="text-[10px] uppercase tracking-wider font-bold text-slate-400 flex items-center gap-1.5">
-                    <List className="w-3 h-3"/> Vertices Log
-                  </h2>
-                </div>
-
-                <div className="space-y-2">
-                  <div className="text-xs font-mono bg-[#0b1016] p-2.5 rounded-md border border-white/10 relative overflow-hidden">
-                    <div className="absolute left-0 top-0 bottom-0 w-1 bg-slate-300" />
-                    <div className="font-bold mb-1.5 text-slate-200 ml-1">{baseTriangle.name}</div>
-                    <div className="grid grid-cols-1 gap-y-1 text-slate-500 ml-1 break-all">
-                      <div>A ({labelsMap[0]}): <span className="text-slate-200 font-medium">{formatPoint(baseTriangle.points[0])}</span></div>
-                      <div>B ({labelsMap[1]}): <span className="text-slate-200 font-medium">{formatPoint(baseTriangle.points[1])}</span></div>
-                      <div>C ({labelsMap[2]}): <span className="text-slate-200 font-medium">{formatPoint(baseTriangle.points[2])}</span></div>
-                    </div>
-                  </div>
-
-                  {activeTriangles.slice(0, 50).map(tri => (
-                    <div key={tri.id} className="text-[11px] font-mono bg-[#111821] p-2 rounded-md border border-white/10 shadow-sm relative overflow-hidden hover:bg-[#18222c] transition-colors">
-                      <div className="absolute left-0 top-0 bottom-0 w-1" style={{ backgroundColor: getTriangleRenderStyle(tri).color }} />
-                      <div className="font-bold mb-1 text-slate-300 ml-1.5">{tri.id}</div>
-                      <div className="grid grid-cols-1 gap-y-0.5 text-slate-500 ml-1.5 break-all">
-                        <div>A: <span className="text-slate-300">{formatPoint(tri.points[0])}</span></div>
-                        <div>B: <span className="text-slate-300">{formatPoint(tri.points[1])}</span></div>
-                        <div>C: <span className="text-slate-300">{formatPoint(tri.points[2])}</span></div>
-                      </div>
-                    </div>
-                  ))}
-                  {activeTriangles.length > 50 && <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 text-center py-2 bg-[#0b1016] rounded-md border border-white/10">...and {activeTriangles.length - 50} more</div>}
                 </div>
               </div>
             )}
