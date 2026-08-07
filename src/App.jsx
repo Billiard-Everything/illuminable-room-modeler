@@ -587,7 +587,7 @@ const deriveEffectiveSequenceCode = (sequenceText, rayAngleInput, baseTriangle, 
   const typedCode = (sequenceText || '').trim();
   if (typedCode) return typedCode;
   // Number('') and Number('   ') both coerce to 0 (not NaN), so a blank
-  // Trajectory Angle would otherwise silently resolve to a real 0deg shot
+  // Trace Ray Angle would otherwise silently resolve to a real 0deg shot
   // instead of "no angle given" — trim and reject blank explicitly first.
   const trimmedAngle = (rayAngleInput ?? '').toString().trim();
   if (!trimmedAngle) return '';
@@ -2582,7 +2582,7 @@ export default function App() {
   // Two modes share the same viewer: geometric ray tracing and code unfolding.
   const [simulatorMode, setSimulatorMode] = useState(() => (
     // 'ray' was a separate tab in older saved workspaces, since merged into
-    // 'code' (a graph's Trajectory Angle now lives beside its own Code
+    // 'code' (a graph's Trace Ray Angle now lives beside its own Code
     // Sequence) — fall back to 'code' so a restored save never lands on a
     // mode that no longer exists.
     restoredWorkspace?.simulatorMode === 'graph' ? 'graph' : 'code'
@@ -2611,7 +2611,7 @@ export default function App() {
       : [{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 5, y: 5 }]
   ));
 
-  // A Trajectory Angle (per-row, see rayAngleInput on the sequence row
+  // A Trace Ray Angle (per-row, see rayAngleInput on the sequence row
   // model) is traced from vertex A every time — no separate Origin Vertex
   // choice. Max Bounces stays a single shared safety cap (like Base Length)
   // rather than a per-row value, since it bounds computation rather than
@@ -2948,7 +2948,7 @@ export default function App() {
   }, [baseCoordsInput, baseInputMode, angleParams, themePalette.baseTriangle]);
 
   // The active row's own Code Sequence always wins when non-blank;
-  // otherwise its Trajectory Angle (if set) is traced against this same
+  // otherwise its Trace Ray Angle (if set) is traced against this same
   // baseTriangle and converted back into its equivalent code — see
   // deriveEffectiveSequenceCode. Kept as "billiardsCode" so every existing
   // reader keeps working against "whichever code is actually driving the
@@ -2966,7 +2966,7 @@ export default function App() {
   // below its own code sequence, computed against that row's own committed
   // Angle A/B (not the shared angleParams/baseTriangle above, which only
   // ever reflects the active row) — and, same as the active row above,
-  // falls back to that row's own Trajectory Angle when its Code Sequence is
+  // falls back to that row's own Trace Ray Angle when its Code Sequence is
   // blank.
   const codeDataByRowId = useMemo(() => {
     const map = {};
@@ -2975,7 +2975,16 @@ export default function App() {
       if (!hasCompleteAngleParams(params) || !hasValidAngleTriangle(params)) { map[row.id] = null; continue; }
       const rowTriangle = buildBaseTriangle('angles', baseCoordsInput, params);
       const effectiveCode = deriveEffectiveSequenceCode(row.sequenceText, row.rayAngleInput, rowTriangle, maxBounces);
-      map[row.id] = effectiveCode ? unfoldCodeData(effectiveCode, rowTriangle, true) : null;
+      if (!effectiveCode) { map[row.id] = null; continue; }
+      const rowCodeData = unfoldCodeData(effectiveCode, rowTriangle, true);
+      // The Trace Ray Angle field displays this (instead of its own raw
+      // draft text) whenever a Code Sequence is actually driving the row,
+      // so it always reads the true angle of the rendered shot — matching
+      // the active row's own Shot Vector "Global Angle" readout exactly
+      // (same trimmed chain, same physical-A-at-origin start point).
+      const renderableRowTriangles = getRenderableActiveTriangles(rowCodeData.triangles);
+      const rowFinalShot = renderableRowTriangles.length > 0 ? renderableRowTriangles.at(-1).points[0] : rowTriangle.points[0];
+      map[row.id] = { ...rowCodeData, globalAngleDegrees: getGlobalAngle(rowTriangle.points[0], rowFinalShot) };
     }
     return map;
   }, [sequences, baseCoordsInput, baseTriangleLength, maxBounces]);
@@ -3685,7 +3694,7 @@ export default function App() {
     // 'sequence'-tagged errors so an unrelated Angle/Step error is untouched.
     if (row.draftSequenceText === row.sequenceText && !(row.validationError && row.validationErrorSource === 'sequence')) return true;
     // An intentionally-cleared code is now a valid state (this row may be
-    // relying on its own Trajectory Angle instead — see
+    // relying on its own Trace Ray Angle instead — see
     // deriveEffectiveSequenceCode), so only a non-blank draft goes through
     // format validation; blank always commits straight through.
     if (row.draftSequenceText.trim()) {
@@ -3736,7 +3745,7 @@ export default function App() {
     setSequences(rows => rows.map(row => row.id === id ? { ...row, draftSequenceText: row.sequenceText, validationError: null, validationErrorSource: null } : row));
   };
 
-  // Trajectory Angle needs none of the Code Sequence field's heavy
+  // Trace Ray Angle needs none of the Code Sequence field's heavy
   // Vertex Line Test gating: it's only ever consulted when this row's own
   // Code Sequence is blank (see deriveEffectiveSequenceCode), and the code
   // it derives is traced from a real reflection path, so it can never fail
@@ -3955,7 +3964,7 @@ export default function App() {
           <div className="grid grid-cols-2 gap-1 rounded-lg border border-white/10 bg-[#070b10] p-1">
             <button
               onClick={() => setSimulatorMode('code')}
-              title="Unfold a code sequence or a traced Trajectory Angle, per graph."
+              title="Unfold a code sequence or a traced Trace Ray Angle, per graph."
               className={`rounded-md px-2 py-1.5 text-xs font-semibold transition-all flex items-center justify-center gap-1 whitespace-nowrap ${simulatorMode === 'code' ? 'bg-cyan-300/15 text-cyan-100 shadow-sm' : 'text-slate-500 hover:text-slate-200 hover:bg-white/5'}`}
             >
               <Code2 className="w-4 h-4"/> Unfold Code
@@ -4019,7 +4028,7 @@ export default function App() {
               </div>
             ) : (
               <div className="space-y-2.5">
-                {/* Angle A, Angle B, Angle Step, Trajectory Angle, and Plot
+                {/* Angle A, Angle B, Angle Step, Trace Ray Angle, and Plot
                     Valid Angle Region all live on each graph's own card
                     (Sequence Parser list below) so every graph keeps fully
                     independent values —
@@ -4036,7 +4045,7 @@ export default function App() {
                   </div>
                 )}
                 <p className="text-[10px] text-slate-500 leading-relaxed">
-                  Angle A, Angle B, Angle Step, Trajectory Angle, and Plot Valid Angle Region are set per graph in the Sequence Parser list below.
+                  Angle A, Angle B, Angle Step, Trace Ray Angle, and Plot Valid Angle Region are set per graph in the Sequence Parser list below.
                 </p>
               </div>
             )}
@@ -4077,7 +4086,7 @@ export default function App() {
                   step="1"
                   value={maxBounces}
                   onChange={e => setMaxBounces(parseInt(e.target.value))}
-                  title="Safety cap on how many reflections a graph's Trajectory Angle is traced through before giving up."
+                  title="Safety cap on how many reflections a graph's Trace Ray Angle is traced through before giving up."
                   className="w-16 bg-[#0b1016] border border-white/10 rounded-md px-2 py-1 text-xs text-center focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 transition-all"
                 />
               </label>
@@ -4093,7 +4102,7 @@ export default function App() {
                 <span className="text-[10px] font-mono text-slate-500">{sequences.length} graph{sequences.length === 1 ? '' : 's'}</span>
               </div>
               <p className="text-[10px] text-slate-500 mb-2 leading-relaxed">
-                Each card is one independent graph with its own code, Angle A/B, Angle Step, Trajectory Angle, and color, plotted together on the shared Valid Angle A-B Region graph. A graph needs either a Code Sequence or a Trajectory Angle (Code Sequence wins if both are given). Click a card to make it the active unfolding shown on the main canvas.
+                Each card is one independent graph with its own code, Angle A/B, Angle Step, Trace Ray Angle, and color, plotted together on the shared Valid Angle A-B Region graph. A graph needs either a Code Sequence or a Trace Ray Angle (Code Sequence wins if both are given). Click a card to make it the active unfolding shown on the main canvas.
               </p>
               <div className="mb-3 flex gap-2">
                 <button
@@ -4141,6 +4150,13 @@ export default function App() {
                   // avoids. Whatever's typed still only actually validates
                   // at Enter/Plot time, same as every other field.
                   const anglesIncomplete = row.draftAngleA === '' || row.draftAngleB === '';
+                  // Whenever this row's own Code Sequence is set (Code
+                  // Sequence always wins — see deriveEffectiveSequenceCode),
+                  // its Trace Ray Angle field shows that code's own Global
+                  // Angle (computed in codeDataByRowId) instead of an
+                  // editable draft, since the typed angle is ignored anyway.
+                  const isRowCodeDriven = row.sequenceText.trim().length > 0;
+                  const rowGlobalAngle = codeDataByRowId[row.id]?.globalAngleDegrees;
                   const plotInfo = plotStatusById[row.id];
                   const isPlotting = plotInfo?.status === 'running';
                   // Status line uses the professor's requested vocabulary
@@ -4346,7 +4362,7 @@ export default function App() {
                         title={anglesIncomplete ? `Set ${row.label}'s Angle A and Angle B above before entering a code.` : 'Type freely, including spaces. Press Enter to apply, Escape to discard the edit.'}
                         className={`mt-1.5 w-full bg-[#080b0f] border rounded px-2 py-1 text-[11px] font-mono outline-none placeholder:text-slate-600 ${anglesIncomplete ? 'border-white/5 text-slate-600 cursor-not-allowed' : 'border-white/10 text-slate-100 focus:border-cyan-300/50'}`}
                       />
-                      {/* Trajectory Angle: an alternate way to give this
+                      {/* Trace Ray Angle: an alternate way to give this
                           graph a shot without typing a code — only
                           consulted when the Code Sequence above is blank
                           (see deriveEffectiveSequenceCode; a non-blank Code
@@ -4358,22 +4374,22 @@ export default function App() {
                           <input
                             type="number"
                             step={angleInputStep}
-                            readOnly={anglesIncomplete}
-                            value={row.draftRayAngleInput}
+                            readOnly={anglesIncomplete || isRowCodeDriven}
+                            value={isRowCodeDriven && Number.isFinite(rowGlobalAngle) ? formatFixed(rowGlobalAngle) : row.draftRayAngleInput}
                             onChange={e => handleRayAngleDraftChange(row.id, e.target.value)}
                             onFocus={() => handleSelectActiveSequence(row.id)}
                             onBlur={() => handleApplyRayAngleDraft(row.id)}
                             onKeyDown={e => {
                               e.stopPropagation();
-                              if (anglesIncomplete) { e.preventDefault(); return; }
+                              if (anglesIncomplete || isRowCodeDriven) { e.preventDefault(); return; }
                               if (e.key === 'Enter') { e.preventDefault(); handleApplyRayAngleDraft(row.id); }
                               else if (e.key === 'Escape') { e.preventDefault(); handleCancelRayAngleDraft(row.id); e.currentTarget.blur(); }
                             }}
                             onClick={e => e.stopPropagation()}
-                            placeholder="Trajectory Angle"
-                            aria-label={`${row.label} trajectory angle`}
-                            title={row.draftSequenceText.trim() ? `Ignored while ${row.label}'s Code Sequence above is set.` : `Traced from vertex A; used only while ${row.label}'s Code Sequence above is empty.`}
-                            className={`w-full bg-[#080b0f] border rounded px-2 py-1 pr-5 text-[11px] font-mono outline-none placeholder:text-slate-600 ${anglesIncomplete ? 'border-white/5 text-slate-600 cursor-not-allowed' : 'border-white/10 text-slate-100 focus:border-amber-300/50'}`}
+                            placeholder="Trace Ray Angle"
+                            aria-label={`${row.label} trace ray angle`}
+                            title={isRowCodeDriven ? `${row.label}'s Code Sequence above is set, so this shows that code's own Global Angle instead of an editable value.` : `Traced from vertex A; used only while ${row.label}'s Code Sequence above is empty.`}
+                            className={`w-full bg-[#080b0f] border rounded px-2 py-1 pr-5 text-[11px] font-mono outline-none placeholder:text-slate-600 ${anglesIncomplete || isRowCodeDriven ? 'border-white/5 text-slate-600 cursor-not-allowed' : 'border-white/10 text-slate-100 focus:border-amber-300/50'}`}
                           />
                           <span className="absolute right-1.5 top-1 text-slate-500 font-mono text-[10px]">&deg;</span>
                         </div>
@@ -4398,7 +4414,7 @@ export default function App() {
                         type="button"
                         onClick={e => { e.stopPropagation(); handlePlotSequenceNow(row.id); }}
                         disabled={!canPlotNow}
-                        title={anglesIncomplete ? 'Set Angle A and Angle B first' : (!row.draftSequenceText.trim() && !row.draftRayAngleInput.trim()) ? 'Enter a Code Sequence or a Trajectory Angle first' : `Calculate and plot ${row.label} on the shared Valid Angle A-B Region graph`}
+                        title={anglesIncomplete ? 'Set Angle A and Angle B first' : (!row.draftSequenceText.trim() && !row.draftRayAngleInput.trim()) ? 'Enter a Code Sequence or a Trace Ray Angle first' : `Calculate and plot ${row.label} on the shared Valid Angle A-B Region graph`}
                         className="mt-1.5 w-full flex items-center justify-center gap-1.5 bg-cyan-500/15 hover:bg-cyan-500/25 disabled:opacity-40 disabled:cursor-not-allowed border border-cyan-300/30 text-cyan-100 px-2.5 py-1 rounded-md text-[10px] font-bold transition-colors"
                       >
                         {isPlotting ? <Loader2 className="w-3 h-3 animate-spin" /> : <ScatterChart className="w-3 h-3" />}
@@ -4602,7 +4618,7 @@ export default function App() {
             {simulatorMode === 'code' && codeData.parsedSequence.length > 0 && (
               <div className="mb-3 bg-[#151c24] p-4 rounded-lg border border-white/10 shadow-[0_8px_28px_rgba(0,0,0,0.22)]">
                 {/* Only shown when the active row's own Code Sequence is
-                    blank, i.e. it's being driven by its Trajectory Angle
+                    blank, i.e. it's being driven by its Trace Ray Angle
                     instead (see billiardsCode/deriveEffectiveSequenceCode) —
                     lets that derived code be inspected or promoted into an
                     explicit, editable one via Copy. */}
@@ -4610,7 +4626,7 @@ export default function App() {
                   <div className="mb-3 pb-3 border-b border-white/10">
                     <div className="flex items-center justify-between mb-2">
                       <h3 className="text-[10px] uppercase tracking-wider font-bold text-amber-200 flex items-center gap-1.5">
-                        <Zap className="w-3 h-3" /> Derived From Trajectory Angle
+                        <Zap className="w-3 h-3" /> Derived From Trace Ray Angle
                       </h3>
                       <button
                         onClick={() => navigator.clipboard.writeText(billiardsCode)}
