@@ -4406,7 +4406,7 @@ export default function App() {
                           if (e.key === 'Enter') { e.preventDefault(); handleApplySequenceDraft(row.id); }
                           else if (e.key === 'Escape') { e.preventDefault(); handleCancelSequenceDraft(row.id); e.currentTarget.blur(); }
                         }}
-                        placeholder={anglesIncomplete ? 'Enter Angle A/B above first' : 'e.g. 1 5 16 5 1 2 3 6'}
+                        placeholder={anglesIncomplete ? 'Enter Angle A/B above first' : 'Enter Code Sequence'}
                         aria-label={`${row.label} sequence text`}
                         aria-disabled={anglesIncomplete}
                         title={anglesIncomplete ? `Set ${row.label}'s Angle A and Angle B above before entering a code.` : 'Type freely, including spaces. Press Enter to apply, Escape to discard the edit.'}
@@ -4422,8 +4422,8 @@ export default function App() {
                           (see showComputedRayAngle) rather than the raw
                           typed value, so it can never disagree with the
                           Shot Vector panel's own "Global Angle" readout. */}
-                      <div className="mt-1.5 flex items-center gap-1.5">
-                        <span className="text-[10px] font-bold text-slate-500 shrink-0">or</span>
+                      <span className="mt-1.5 block text-[10px] font-bold text-slate-500">Angle Ray</span>
+                      <div className="flex items-center gap-1.5">
                         <div className="relative flex-1">
                           <input
                             type="number"
@@ -4440,7 +4440,7 @@ export default function App() {
                               else if (e.key === 'Escape') { e.preventDefault(); handleCancelRayAngleDraft(row.id); e.currentTarget.blur(); }
                             }}
                             onClick={e => e.stopPropagation()}
-                            placeholder="Angle Ray"
+                            placeholder="Enter Angle Ray"
                             aria-label={`${row.label} angle ray`}
                             title={isRowCodeDriven ? `${row.label}'s Code Sequence above is set, so this shows that code's own Global Angle instead of an editable value.` : `Traced from vertex A; used only while ${row.label}'s Code Sequence above is empty. Shows this shot's own Global Angle once applied.`}
                             className={`w-full bg-[#080b0f] border rounded px-2 py-1 pr-5 text-[11px] font-mono outline-none placeholder:text-slate-600 ${anglesIncomplete || isRowCodeDriven ? 'border-white/5 text-slate-600 cursor-not-allowed' : 'border-white/10 text-slate-100 focus:border-amber-300/50'}`}
