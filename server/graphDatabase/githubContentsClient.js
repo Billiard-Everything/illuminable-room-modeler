@@ -14,12 +14,41 @@
 // which resolves to `null` rather than throwing: "this file doesn't
 // exist yet" is an expected, first-class outcome (a brand-new graph, or
 // an index.json that hasn't been created yet), not a failure.
+//
+// Logging
+// --------
+// Every request this module makes, and every response it gets back, is
+// logged — method + path + status, so "is GitHub even being called, and
+// what did it actually say" is answerable from server logs alone (this
+// was added specifically because a silent GitHub failure, correctly
+// falling back to local storage per githubGraphDatabase.js's own design,
+// otherwise looks IDENTICAL from the outside to "GitHub was never wired
+// up at all" — see graphDatabase.js's own startup log for the other half
+// of that same diagnosis). A non-ok response's FULL body (GitHub's own
+// error JSON — message, documentation_url, sometimes errors[]) is read
+// and included in the thrown Error, not just the HTTP status code, since
+// "404" alone doesn't distinguish "wrong repo name" from "token has no
+// access" from "branch doesn't exist" — GitHub's own message field does.
+// Never logs the token itself, only that one is present.
 
 const API_BASE = 'https://api.github.com';
 const API_VERSION = '2022-11-28';
 
 const encodeContent = (text) => Buffer.from(text, 'utf8').toString('base64');
 const decodeContent = (base64) => Buffer.from(base64, 'base64').toString('utf8');
+
+const log = (...args) => console.log('[github-contents-client]', ...args);
+
+/** Reads a failed response's body (GitHub's own JSON error shape, when present) for a diagnostic message — never throws itself, since the response body might not even be valid JSON (e.g. an upstream proxy's own HTML error page). */
+const describeError = async (res) => {
+  const text = await res.text().catch(() => '');
+  try {
+    const body = JSON.parse(text);
+    return body.message ? `${body.message}${body.documentation_url ? ` (see ${body.documentation_url})` : ''}` : text;
+  } catch {
+    return text || '(no response body)';
+  }
+};
 
 /**
  * Builds a client bound to one repo/branch.
@@ -48,9 +77,15 @@ export const createGithubContentsClient = ({ token, owner, repo, branch, fetchIm
      * @returns {Promise<{text: string, sha: string}|null>} null if the file doesn't exist (a 404) — never throws for that specific case.
      */
     async getFile(repoPath) {
+      log(`GET ${owner}/${repo}/contents/${repoPath} (ref=${branch})`);
       const res = await fetchImpl(`${contentsUrl(repoPath)}?ref=${encodeURIComponent(branch)}`, { headers });
+      log(`  -> ${res.status} ${res.statusText}`);
       if (res.status === 404) return null;
-      if (!res.ok) throw new Error(`GitHub getFile(${repoPath}) failed: ${res.status} ${res.statusText}`);
+      if (!res.ok) {
+        const detail = await describeError(res);
+        console.error(`[github-contents-client] GET ${repoPath} failed:`, res.status, detail);
+        throw new Error(`GitHub getFile(${repoPath}) failed: ${res.status} ${res.statusText} — ${detail}`);
+      }
       const body = await res.json();
       return { text: decodeContent(body.content), sha: body.sha };
     },
@@ -62,6 +97,7 @@ export const createGithubContentsClient = ({ token, owner, repo, branch, fetchIm
      * @returns {Promise<string>} the file's new sha.
      */
     async putFile(repoPath, text, { sha, message } = {}) {
+      log(`PUT ${owner}/${repo}/contents/${repoPath} (branch=${branch}, ${sha ? 'update, sha=' + sha.slice(0, 8) + '…' : 'create'}, ${text.length} bytes)`);
       const res = await fetchImpl(contentsUrl(repoPath), {
         method: 'PUT',
         headers: { ...headers, 'Content-Type': 'application/json' },
@@ -72,8 +108,14 @@ export const createGithubContentsClient = ({ token, owner, repo, branch, fetchIm
           ...(sha ? { sha } : {}),
         }),
       });
-      if (!res.ok) throw new Error(`GitHub putFile(${repoPath}) failed: ${res.status} ${res.statusText}`);
+      log(`  -> ${res.status} ${res.statusText}`);
+      if (!res.ok) {
+        const detail = await describeError(res);
+        console.error(`[github-contents-client] PUT ${repoPath} failed:`, res.status, detail);
+        throw new Error(`GitHub putFile(${repoPath}) failed: ${res.status} ${res.statusText} — ${detail}`);
+      }
       const body = await res.json();
+      log(`  saved ${repoPath} — new sha ${body.content.sha.slice(0, 8)}…`);
       return body.content.sha;
     },
 
@@ -88,12 +130,18 @@ export const createGithubContentsClient = ({ token, owner, repo, branch, fetchIm
         if (!existing) return;
         fileSha = existing.sha;
       }
+      log(`DELETE ${owner}/${repo}/contents/${repoPath} (branch=${branch})`);
       const res = await fetchImpl(contentsUrl(repoPath), {
         method: 'DELETE',
         headers: { ...headers, 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: message ?? `Delete ${repoPath}`, sha: fileSha, branch }),
       });
-      if (!res.ok && res.status !== 404) throw new Error(`GitHub deleteFile(${repoPath}) failed: ${res.status} ${res.statusText}`);
+      log(`  -> ${res.status} ${res.statusText}`);
+      if (!res.ok && res.status !== 404) {
+        const detail = await describeError(res);
+        console.error(`[github-contents-client] DELETE ${repoPath} failed:`, res.status, detail);
+        throw new Error(`GitHub deleteFile(${repoPath}) failed: ${res.status} ${res.statusText} — ${detail}`);
+      }
     },
   };
 };

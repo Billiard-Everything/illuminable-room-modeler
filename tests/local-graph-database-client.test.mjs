@@ -68,11 +68,22 @@ test('saveLocalExactGraph posts params/points/computeTimeMs as JSON', async () =
     return { ok: true, json: async () => ({ saved: true }) };
   };
   const params = { sequenceText: 'X', angleA: 1, angleB: 2, angleStepInput: '0.1', baseLength: 90 };
-  await saveLocalExactGraph(params, 1, [{ a: 1, b: 2 }], 500);
+  const ok = await saveLocalExactGraph(params, 1, [{ a: 1, b: 2 }], 500);
   assert.match(capturedUrl, /\/api\/local-graphs$/);
   assert.equal(capturedOptions.method, 'POST');
   assert.equal(capturedOptions.headers['Content-Type'], 'application/json');
   assert.deepEqual(JSON.parse(capturedOptions.body), { params, points: [{ a: 1, b: 2 }], computeTimeMs: 500 });
+  assert.equal(ok, true);
+});
+
+test('saveLocalExactGraph resolves to false (not just non-throwing) on a non-ok response', async () => {
+  globalThis.fetch = async () => ({ ok: false, status: 503 });
+  assert.equal(await saveLocalExactGraph({}, 1, [], null), false);
+});
+
+test('saveLocalExactGraph resolves to false (not just non-throwing) when fetch itself rejects', async () => {
+  globalThis.fetch = async () => { throw new Error('network down'); };
+  assert.equal(await saveLocalExactGraph({}, 1, [], null), false);
 });
 
 test('saveLocalExactGraph includes title/graphColorHex/notes/tags/favorite/visibility when provided', async () => {

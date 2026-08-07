@@ -11,6 +11,7 @@ import http from 'node:http';
 import { createDefaultApp } from './app.js';
 import { getPool } from '../db/pool.js';
 import { runMigrations } from '../db/migrate.js';
+import { logGraphDatabaseStartup } from '../graphDatabase/graphDatabase.js';
 
 // Render (and most hosting platforms) assign the port to listen on via
 // PORT and expect the app to bind to it — GRAPH_API_PORT is this project's
@@ -43,4 +44,13 @@ try {
 const app = await createDefaultApp();
 http.createServer(app).listen(PORT, () => {
   console.log(`[graph-api] listening on port ${PORT}`);
+  // Explicit, not just relying on graphDatabase.js's own import-time side
+  // effect (which already ran, earlier, as part of createDefaultApp's own
+  // import chain) — printed again right here so it lands in the exact
+  // same log window as "listening on port", which a hosting platform's
+  // own health check already has to be reading from for the service to
+  // be considered up at all. Ensures this message is never missing from
+  // a platform's log viewer just because it was emitted a moment earlier
+  // than whatever that platform's log capture actually started reading.
+  logGraphDatabaseStartup();
 });

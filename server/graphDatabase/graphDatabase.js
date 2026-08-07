@@ -304,6 +304,13 @@ export const createGraphDatabase = (baseDir) => {
   };
 };
 
+// Set once, by resolveDefaultGraphDatabase() below, at module load — the
+// plain diagnostic facts logGraphDatabaseStartup() prints. Kept separate
+// from the console.log calls themselves so logging can be *triggered*
+// explicitly (see logGraphDatabaseStartup's own comment on why) without
+// re-deriving or duplicating the enabled/owner/repo/branch decision.
+let backendInfo = null;
+
 /**
  * Resolves which GraphDatabase the default `graphDatabase` singleton below
  * actually uses. Render already has GITHUB_TOKEN/GITHUB_OWNER/GITHUB_REPO/
@@ -321,15 +328,54 @@ export const createGraphDatabase = (baseDir) => {
  * GitHub outage degrades this app back to its prior local-only behavior
  * instead of breaking plotting.
  */
-const resolveDefaultGraphDatabase = () => {
+export const resolveDefaultGraphDatabase = () => {
   const { GITHUB_TOKEN, GITHUB_OWNER, GITHUB_REPO, GITHUB_BRANCH } = process.env;
   const local = createGraphDatabase();
-  if (GITHUB_TOKEN && GITHUB_OWNER && GITHUB_REPO) {
-    return createGithubGraphDatabase({
-      token: GITHUB_TOKEN, owner: GITHUB_OWNER, repo: GITHUB_REPO, branch: GITHUB_BRANCH || 'main', fallback: local,
-    });
+  const enabled = Boolean(GITHUB_TOKEN && GITHUB_OWNER && GITHUB_REPO);
+  const branch = GITHUB_BRANCH || 'main';
+  backendInfo = {
+    enabled,
+    owner: GITHUB_OWNER ?? null,
+    repo: GITHUB_REPO ?? null,
+    branch,
+    missing: [!GITHUB_TOKEN && 'GITHUB_TOKEN', !GITHUB_OWNER && 'GITHUB_OWNER', !GITHUB_REPO && 'GITHUB_REPO'].filter(Boolean),
+  };
+  if (enabled) {
+    return createGithubGraphDatabase({ token: GITHUB_TOKEN, owner: GITHUB_OWNER, repo: GITHUB_REPO, branch, fallback: local });
   }
   return local;
+};
+
+/**
+ * Prints the one required startup diagnostic — exactly one of:
+ *   [graph-database] GitHub-backed storage ENABLED
+ *   [graph-database] GitHub-backed storage DISABLED
+ * followed, only when ENABLED, by the owner/repository/branch actually in
+ * use (never the token — only its presence was ever checked). A silent,
+ * correctly-working local fallback looks IDENTICAL from the outside to
+ * "GitHub was never wired up at all" (both just quietly work against
+ * local disk), so this is what actually answers "is the GitHub upload
+ * path even being called" before a single request comes in.
+ *
+ * Called twice, deliberately: once here at module load (so anything that
+ * merely *imports* graphDatabase.js, e.g. a one-off script, still gets
+ * the diagnostic), and again explicitly by server/api/start.js's own
+ * startup sequence, right where it logs "listening on port" — the same
+ * log window a hosting platform's own health check already has to be
+ * reading from for the service to be considered up at all, which rules
+ * out any early-process log-capture timing gap as an explanation for
+ * this message going missing from a platform's log viewer.
+ */
+export const logGraphDatabaseStartup = () => {
+  if (backendInfo.enabled) {
+    console.log('[graph-database] GitHub-backed storage ENABLED');
+    console.log(`[graph-database]   owner:      ${backendInfo.owner}`);
+    console.log(`[graph-database]   repository: ${backendInfo.repo}`);
+    console.log(`[graph-database]   branch:     ${backendInfo.branch}`);
+  } else {
+    console.log('[graph-database] GitHub-backed storage DISABLED');
+    console.log(`[graph-database]   missing env var(s): ${backendInfo.missing.join(', ')}`);
+  }
 };
 
 // The default library instance — GRAPH_LIBRARY_DIR env var, or
@@ -338,3 +384,8 @@ const resolveDefaultGraphDatabase = () => {
 // ensureDir's own call site, inside saveGraph): importing this module
 // never touches the filesystem (or GitHub) by itself.
 export const graphDatabase = resolveDefaultGraphDatabase();
+
+// See logGraphDatabaseStartup's own comment on why this fires both here
+// (any importer of this module gets the diagnostic) and again, explicitly,
+// from server/api/start.js's own startup sequence.
+logGraphDatabaseStartup();

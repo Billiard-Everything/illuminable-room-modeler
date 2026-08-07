@@ -143,7 +143,7 @@ test('default code unfolding keeps x at the source and preserves the side path',
       assertPointAlmostEqual(tri.fanPoint, runTriangles[0].fanPoint, 1e-10, `fan ${runIndex} point`);
     }
   }
-  assert.deepEqual(codeData.sideSequence.slice(0, 15), [1, 3, 1, 2, 3, 2, 3, 2, 3, 2, 3, 1, 3, 2, 3]);
+  assert.deepEqual(codeData.sideSequence.slice(0, 15), [3, 1, 3, 2, 1, 2, 1, 2, 1, 2, 1, 3, 1, 2, 1]);
   assert.deepEqual(codeData.reflectionEdges.slice(0, 15), [1, 0, 1, 2, 0, 2, 0, 2, 0, 2, 0, 1, 0, 2, 0]);
 
   const symbolAngles = api.getSymbolAngleDegreesFromTriangle(baseTriangle, codeData.idxToAngle);

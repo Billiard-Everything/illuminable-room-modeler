@@ -1,7 +1,7 @@
 // React supplies state, refs, effects, and memoization for this client-only tool.
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 // Lucide supplies recognizable control/status icons without custom SVG code.
-import { Maximize, RotateCcw, Zap, Settings2, List, Code2, Compass, ChevronRight, ChevronLeft, Activity, CheckCircle2, XCircle, ShieldCheck, Eye, EyeOff, Search, AlertTriangle, Sun, Moon, ZoomIn, ZoomOut, Lock, Unlock, ScatterChart, Plus, Loader2, Trash2, Library, Database, Copy } from 'lucide-react';
+import { Maximize, RotateCcw, Zap, Settings2, List, Code2, Compass, ChevronRight, ChevronLeft, Activity, CheckCircle2, XCircle, ShieldCheck, Eye, EyeOff, Search, AlertTriangle, Sun, Moon, ZoomIn, ZoomOut, Lock, Unlock, ScatterChart, Plus, Loader2, Trash2, Library, Database, Save, Copy } from 'lucide-react';
 // The angle-region plot pop-up lives in its own module (see src/anglePlot) so
 // it can be unit-tested without React and does not bloat this file further.
 import GraphSetupWindow from './sequences/GraphSetupWindow.jsx';
@@ -94,10 +94,10 @@ const THEME_PALETTES = {
 };
 
 // Mapping triangle edges (0, 1, 2) to their standard Side numbers (1, 2, 3)
-// Edge 0 (V0-V1) is opposite V2(C) -> Side 3
-// Edge 1 (V1-V2) is opposite V0(A) -> Side 1
+// Edge 0 (V0-V1) is opposite V2(C) -> Side 1
+// Edge 1 (V1-V2) is opposite V0(A) -> Side 3
 // Edge 2 (V2-V0) is opposite V1(B) -> Side 2
-const EDGE_TO_SIDE = { 0: 3, 1: 1, 2: 2 };
+const EDGE_TO_SIDE = { 0: 1, 1: 3, 2: 2 };
 
 // The locked/preview switch stores a short machine value instead of display text.
 const SHOT_MODE_LOCKED = 'locked';
@@ -2580,9 +2580,10 @@ export default function App() {
   ));
 
   // --- RAY SIMULATOR SPECIFIC STATE ---
-  // Physical vertex index used as the origin in direct ray mode.
-  // Trace-ray mode always starts from vertex A (the origin), matching code mode's convention.
-  const [rayStartVertex] = useState(0);
+  // The trajectory ray is always drawn from vertex A — no longer a user
+  // choice (the old "Origin Vertex" A/B/C picker was removed), so this is
+  // a plain constant rather than state.
+  const rayStartVertex = 0;
   // Ray-mode angle is stored in degrees because that is what the UI exposes.
   const [rayAngle, setRayAngle] = useState(() => restoredWorkspace?.rayAngle ?? 60);
   // Base geometry angles for Trace Ray mode
@@ -2694,6 +2695,17 @@ export default function App() {
   // favorite/tags/notes only make sense for this single-user local library,
   // not the multi-user shared one).
   const [isGraphDatabaseOpen, setIsGraphDatabaseOpen] = useState(false);
+  // Row ids currently mid-way through an explicit "Save Graph" click (see
+  // handleSaveGraphNow) — drives that row's own button showing "Saving…"
+  // and being disabled. Never persisted: a save either finishes or fails
+  // within seconds, so there's nothing meaningful to restore across a reload.
+  const [savingGraphIds, setSavingGraphIds] = useState(() => new Set());
+  // A small, transient success/failure banner for "Save Graph" — this app
+  // has no existing toast system to reuse, so this is the one new small
+  // piece of UI state the button needs. Auto-dismisses itself; see
+  // showSaveToast/saveToastTimeoutRef below.
+  const [saveToast, setSaveToast] = useState(null); // { message, isError } | null
+  const saveToastTimeoutRef = useRef(null);
   // Bumped on every "Plot Valid Angle Region" click so an already-open window
   // regenerates and comes to the front instead of a duplicate window opening.
   // Per-row plot lifecycle, mirrored out of AnglePlotWindow (the only place
@@ -2759,7 +2771,6 @@ export default function App() {
     baseTriangleLength,
     angleStepControlIncrementInput,
     baseCoordsInput,
-    rayStartVertex,
     rayAngle,
     rayAngleA,
     rayAngleB,
@@ -2808,7 +2819,7 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     theme, isSidebarVisible, simulatorMode, baseInputMode, baseTriangleLength,
-    angleStepControlIncrementInput, baseCoordsInput, rayStartVertex, rayAngle, rayAngleA, rayAngleB, maxBounces,
+    angleStepControlIncrementInput, baseCoordsInput, rayAngle, rayAngleA, rayAngleB, maxBounces,
     sequences, activeSequenceId, shotEditMode, clearanceEpsilonInput, showAllLabels,
     displayPrecisionInput, pan, zoom, isZoomLocked, zoomMagnification,
   ]);
@@ -3516,6 +3527,58 @@ export default function App() {
     if (closePanel) setIsGraphDatabaseOpen(false);
   };
 
+  // Shows a small, self-dismissing banner for the "Save Graph" button's
+  // own success/failure result — see saveToast's own declaration comment
+  // for why this exists (no pre-existing toast system to reuse).
+  const showSaveToast = (message, isError = false) => {
+    if (saveToastTimeoutRef.current) clearTimeout(saveToastTimeoutRef.current);
+    setSaveToast({ message, isError });
+    saveToastTimeoutRef.current = setTimeout(() => setSaveToast(null), 3000);
+  };
+  useEffect(() => () => {
+    if (saveToastTimeoutRef.current) clearTimeout(saveToastTimeoutRef.current);
+  }, []);
+
+  // The explicit "Save Graph" button, next to "Plot Valid Angle Region" on
+  // each row's own card: persists THIS row's already-computed points to
+  // the shared GraphDatabase (GitHub-backed on the deployed site, local
+  // disk in local dev — see server/graphDatabase/graphDatabase.js's own
+  // resolveDefaultGraphDatabase) right now, on demand, rather than waiting
+  // for the automatic save AnglePlotWindow.jsx's own background-exact-
+  // complete handler already performs once a row's brute-force sweep
+  // finishes uninterrupted. Deliberately calls that EXACT SAME
+  // saveLocalExactGraph function (never a second save pathway) with the
+  // row's own current points/renderInfo, already sitting in
+  // plotStatusById — mirrored out of AnglePlotWindow's own results state
+  // by its onRowStatusChange callback — so this never touches, re-runs, or
+  // waits on any plotting/generation logic of its own; it only ever
+  // persists a result that's already on screen.
+  //
+  // Requires graphStatus === EXACT, not just status === 'done': a row can
+  // be "done" from the fast adaptive preview alone, well before its
+  // background brute-force sweep finishes — saving THAT into the
+  // permanent library would store an incomplete geometry under a hash
+  // nothing could ever correct later, exactly the failure mode the
+  // automatic save already guards against (see AnglePlotWindow.jsx's own
+  // `!bgTimeLimited` check). This button enforces the identical rule.
+  const handleSaveGraphNow = async (row) => {
+    const plotInfo = plotStatusById[row.id];
+    if (!plotInfo || plotInfo.renderInfo?.graphStatus !== GRAPH_STATUS.EXACT || !plotInfo.points?.length) return;
+    setSavingGraphIds(prev => new Set(prev).add(row.id));
+    const ok = await saveLocalExactGraph(
+      graphParamsFromSequence(row, baseTriangleLength),
+      GRAPH_HASH_ALGORITHM_VERSION,
+      plotInfo.points,
+      plotInfo.renderInfo?.durationMs ?? null,
+      { title: row.title, graphColorHex: row.color, notes: row.notes, tags: row.tags, favorite: row.favorite, visibility: row.visibility },
+    );
+    setSavingGraphIds(prev => { const next = new Set(prev); next.delete(row.id); return next; });
+    showSaveToast(
+      ok ? '✓ Graph saved successfully.' : `Couldn't save ${row.label} — the graph database may be unavailable right now.`,
+      !ok,
+    );
+  };
+
   // --- SEQUENCE ROW LIST HANDLERS ---
   // "+ Add Sequence": appends a new, empty, visible row and makes it active
   // (matches "click a row to edit it" — a freshly added row is the one the
@@ -3944,18 +4007,8 @@ export default function App() {
                     now live on each graph's own card (Sequence Parser list
                     below) so every graph keeps fully independent values —
                     Base Length is the only geometry value every graph
-                    still shares. */}
-                <div className="flex items-center gap-2">
-                  <span className="text-[11px] font-bold text-slate-500 w-16 text-right mr-1">Base Length</span>
-                  <input
-                    type="number"
-                    step="any"
-                    value={angleParams.length}
-                    onChange={e => handleAngleParamChange('length', e.target.value)}
-                    placeholder="Enter Base Length"
-                    className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2.5 py-1.5 text-sm focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 placeholder:text-slate-600 transition-all"
-                  />
-                </div>
+                    still shares. Its input lives in the compact row below,
+                    beside Display Decimals. */}
                 {lockedShotNotice && lockedShotNotice.isLengthField && (
                   <div className="text-[10px] text-amber-100 mt-1 font-medium bg-amber-500/10 rounded py-1.5 px-2 border border-amber-300/20 space-y-1">
                     <div className="font-bold">Base Length of {lockedShotNotice.value} was not applied.</div>
@@ -3971,8 +4024,21 @@ export default function App() {
               </div>
             )}
 
-            <div className="mt-3 pt-3 border-t border-white/10">
-              <label className="grid grid-cols-[1fr_88px] gap-2 items-center">
+            <div className="mt-3 pt-3 border-t border-white/10 flex items-end gap-3">
+              {baseInputMode === 'angles' && (
+                <label className="flex flex-col gap-1">
+                  <span className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Base Length</span>
+                  <input
+                    type="number"
+                    step="any"
+                    value={angleParams.length}
+                    onChange={e => handleAngleParamChange('length', e.target.value)}
+                    placeholder="Length"
+                    className="w-16 bg-[#0b1016] border border-white/10 rounded-md px-2 py-1 text-xs text-center focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 placeholder:text-slate-600 transition-all"
+                  />
+                </label>
+              )}
+              <label className="flex flex-col gap-1">
                 <span className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Display Decimals</span>
                 <input
                   type="number"
@@ -3982,7 +4048,7 @@ export default function App() {
                   value={displayPrecisionInput}
                   onChange={e => setDisplayPrecisionInput(e.target.value)}
                   title={`Number of decimal places shown in readouts, clamped from 0 to ${MAX_DISPLAY_DECIMALS}.`}
-                  className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2 py-1.5 text-xs text-center focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 transition-all"
+                  className="w-16 bg-[#0b1016] border border-white/10 rounded-md px-2 py-1 text-xs text-center focus:bg-[#101923] focus:border-cyan-300 focus:ring-1 focus:ring-cyan-300 outline-none font-mono text-slate-100 transition-all"
                 />
               </label>
             </div>
@@ -3998,12 +4064,9 @@ export default function App() {
               <div className="space-y-4">
                 <div>
                   <label className="text-[11px] font-bold text-slate-400 flex justify-between mb-1.5"><span>Trajectory Angle</span></label>
-                  <div className="flex gap-3 items-center">
-                    <input type="range" min="0" max="360" step="0.1" value={rayAngle} onChange={e => setRayAngle(parseFloat(e.target.value))} className="flex-1 accent-amber-600" />
-                    <div className="relative w-20">
-                      <input type="number" value={rayAngle} onChange={e => setRayAngle(parseFloat(e.target.value))} className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2 py-1.5 text-xs text-center focus:bg-[#101923] focus:border-amber-300 focus:ring-1 focus:ring-amber-300 outline-none font-mono text-slate-100" />
-                      <span className="absolute right-1.5 top-1.5 text-slate-500 font-mono text-xs">&deg;</span>
-                    </div>
+                  <div className="relative w-20">
+                    <input type="number" value={rayAngle} onChange={e => setRayAngle(parseFloat(e.target.value))} className="w-full bg-[#0b1016] border border-white/10 rounded-md px-2 py-1.5 text-xs text-center focus:bg-[#101923] focus:border-amber-300 focus:ring-1 focus:ring-amber-300 outline-none font-mono text-slate-100" />
+                    <span className="absolute right-1.5 top-1.5 text-slate-500 font-mono text-xs">&deg;</span>
                   </div>
                 </div>
                 <div>
@@ -4132,6 +4195,12 @@ export default function App() {
                   // pending draft — angles, step, and code together — before
                   // plotting.
                   const canPlotNow = !anglesIncomplete && !!row.draftSequenceText.trim() && !isPlotting;
+                  // "Save Graph" needs the row's *exact* (brute-force-complete)
+                  // geometry, not just any "done" status — see
+                  // handleSaveGraphNow's own comment on why an adaptive-only
+                  // preview must never be persisted as if it were permanent.
+                  const isExactlyPlotted = plotInfo?.renderInfo?.graphStatus === GRAPH_STATUS.EXACT;
+                  const canSaveGraphNow = isExactlyPlotted && !!plotInfo?.points?.length && !savingGraphIds.has(row.id);
                   return (
                     <div
                       key={row.id}
@@ -4318,6 +4387,36 @@ export default function App() {
                         {isPlotting ? <Loader2 className="w-3 h-3 animate-spin" /> : <ScatterChart className="w-3 h-3" />}
                         {isPlotting ? 'Calculating…' : 'Plot Valid Angle Region'}
                       </button>
+                      {/* "Save Graph": persists this row's already-plotted
+                          points to the shared GraphDatabase right now (see
+                          handleSaveGraphNow — reuses the exact same
+                          saveLocalExactGraph call the automatic
+                          background-exact save already makes). "Open Graph
+                          Database": the same browser the sidebar's own
+                          "Graph Database" button opens (see
+                          setIsGraphDatabaseOpen below), placed here too so
+                          saving and browsing the result are one click apart. */}
+                      <div className="flex items-center gap-1.5 mt-1.5">
+                        <button
+                          type="button"
+                          onClick={e => { e.stopPropagation(); handleSaveGraphNow(row); }}
+                          disabled={!canSaveGraphNow}
+                          title={canSaveGraphNow ? `Save ${row.label} to the Graph Database now` : `Plot ${row.label} and wait for its exact computation to finish before it can be saved`}
+                          className="flex-1 flex items-center justify-center gap-1.5 bg-emerald-500/15 hover:bg-emerald-500/25 disabled:opacity-40 disabled:cursor-not-allowed border border-emerald-300/30 text-emerald-100 px-2.5 py-1 rounded-md text-[10px] font-bold transition-colors"
+                        >
+                          {savingGraphIds.has(row.id) ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+                          {savingGraphIds.has(row.id) ? 'Saving…' : 'Save Graph'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={e => { e.stopPropagation(); setIsGraphDatabaseOpen(true); }}
+                          title="Open the Graph Database browser"
+                          className="flex-1 flex items-center justify-center gap-1.5 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-200 px-2.5 py-1 rounded-md text-[10px] font-bold transition-colors"
+                        >
+                          <Database className="w-3 h-3" />
+                          Open Graph Database
+                        </button>
+                      </div>
                       <div className="flex items-center justify-between gap-1.5 mt-1">
                         <span className={`text-[9px] font-bold ${plotPhaseColor}`}>{plotPhase}</span>
                         {plotPhase === 'Plotted' && Number.isFinite(plotInfo?.renderInfo?.durationMs) && (
@@ -4501,7 +4600,13 @@ export default function App() {
                   <ChevronRight className="w-3 h-3" /> Boundary Intersections
                 </h3>
                 <div className="bg-[#0b1016] p-2.5 rounded-md border border-white/10 max-h-24 overflow-y-auto font-mono text-[11px] font-medium text-slate-300 custom-scrollbar break-words leading-relaxed shadow-inner tracking-widest">
-                  {codeData.sideSequence?.join(' ')}
+                  {/* The final entry is where the unfolded path lands exactly
+                      on a vertex, not a genuine side crossing, so it is
+                      dropped from the displayed boundary count. The
+                      underlying codeData.sideSequence itself stays intact —
+                      it still feeds haveSameSideSequence's path-equality
+                      checks, which must keep comparing the full path. */}
+                  {codeData.sideSequence?.slice(0, -1).join(' ')}
                 </div>
               </div>
             )}
@@ -4513,10 +4618,6 @@ export default function App() {
                   <h2 className="text-[10px] uppercase tracking-wider font-bold text-slate-400 flex items-center gap-1.5">
                     <List className="w-3 h-3"/> Vertices Log
                   </h2>
-                  <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500 cursor-pointer hover:text-cyan-200 transition-colors">
-                    <input type="checkbox" checked={showAllLabels} onChange={e => setShowAllLabels(e.target.checked)} className="accent-cyan-400 w-3 h-3" />
-                    PERSIST LABELS
-                  </label>
                 </div>
 
                 <div className="space-y-2">
@@ -4627,9 +4728,16 @@ export default function App() {
               {isZoomLocked ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
               <span className="text-[10px] font-bold">{isZoomLocked ? 'Unlock View' : 'Lock View'}</span>
             </button>
+            <button
+              onClick={() => setShowAllLabels(current => !current)}
+              className={`px-2.5 py-2 transition-colors flex items-center gap-1.5 border-l border-white/10 ${showAllLabels ? 'bg-cyan-500/20 text-cyan-200' : 'hover:bg-[#172230] text-slate-300 hover:text-cyan-200'}`}
+              title="Keep all vertex labels visible on the canvas."
+            >
+              <span className="text-[10px] font-bold">Labels</span>
+            </button>
           </div>
         </div>
-        
+
         {/* Interactive SVG Area */}
         <div 
           ref={containerRef}
@@ -5043,6 +5151,25 @@ export default function App() {
           onClose={() => setIsGraphDatabaseOpen(false)}
           onLoadGraph={handleLoadGraphFromDatabase}
         />
+      )}
+
+      {/* "Save Graph" result banner — self-dismissing (see showSaveToast),
+          no app-provided toast system existed to reuse. High z-index so it
+          stays visible even over the Graph Database browser (z-[83]),
+          since saving and then immediately opening that browser is exactly
+          the flow the buttons beside each other are meant to support. */}
+      {saveToast && (
+        <div
+          role="status"
+          aria-live="polite"
+          className={`fixed bottom-4 right-4 z-[95] flex items-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-bold shadow-[0_12px_40px_rgba(0,0,0,0.5)] ${
+            saveToast.isError
+              ? 'border-red-400/40 bg-red-500/20 text-red-100'
+              : 'border-emerald-400/40 bg-emerald-500/20 text-emerald-100'
+          }`}
+        >
+          {saveToast.message}
+        </div>
       )}
 
       {/* Plain-English error pop-up for a rejected sequence/angle apply
