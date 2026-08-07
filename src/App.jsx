@@ -685,21 +685,18 @@ const unfoldCodeData = (billiardsCode, baseTriangle, enabled = true) => {
   return { triangles, parsedSequence, idxToAngle, angleToIdx, sideSequence, reflectionEdges };
 };
 
-/** Returns the complete reflected chain that belongs on the canvas. */
+/** Returns the reflected chain that belongs on the canvas. */
 const getRenderableActiveTriangles = (activeTriangles) => {
   // This is the single seam between "triangle gets a polygon" and "its
   // vertices get colored markers" (see the marker loop in the SVG below,
-  // which walks [baseTriangle, ...getRenderableActiveTriangles(...)]).
-  // Every element returned here is a real reflected triangle emitted by
-  // unfoldCodeData, not a look-ahead/preview computed for the *next* count
-  // block that hasn't been unfolded yet — so there is no unrendered
-  // triangle whose vertex still gets marked. Do not slice/trim this list
-  // (e.g. dropping the last triangle) without also removing its markers,
-  // or the two loops will disagree and a vertex will render with no
-  // matching polygon under it. See tests/math-regression.test.mjs's
-  // "rendering includes the final reflected triangle instead of treating
-  // it as look-ahead geometry" for the regression this guards against.
-  return activeTriangles;
+  // which walks [baseTriangle, ...getRenderableActiveTriangles(...)]),
+  // so trimming here keeps every consumer (polygon fill, vertex/side
+  // markers, hover) in agreement — none of them ever sees the dropped
+  // triangle, so there is no orphaned marker with no polygon under it.
+  // Per instructor requirement, the very last reflected triangle in the
+  // chain (Code mode's final landing triangle, Ray mode's terminal
+  // bounce) is never drawn, in either mode.
+  return activeTriangles.slice(0, -1);
 };
 
 /** Builds the endpoint-defined shot line used by code-mode validation. */
@@ -4677,7 +4674,7 @@ export default function App() {
         <div className="absolute top-4 right-4 z-10 flex gap-2">
            {simulatorMode === 'code' && (
              <div className="bg-[#101820]/95 text-slate-400 px-3 py-2 text-[11px] rounded-md shadow-[0_8px_24px_rgba(0,0,0,0.32)] border border-white/10 font-mono font-bold flex items-center backdrop-blur">
-                GENERATED: <span className="text-cyan-200 ml-2">{activeTriangles.length}</span>
+                GENERATED: <span className="text-cyan-200 ml-2">{renderableActiveTriangles.length}</span>
              </div>
            )}
           <div className="flex bg-[#101820]/95 rounded-md shadow-[0_8px_24px_rgba(0,0,0,0.32)] border border-white/10 backdrop-blur overflow-hidden">

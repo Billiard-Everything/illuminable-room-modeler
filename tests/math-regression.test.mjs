@@ -192,14 +192,14 @@ test('fan transitions follow the shared side instead of a centroid direction', (
   );
 });
 
-test('rendering includes the final reflected triangle instead of treating it as look-ahead geometry', () => {
+test('rendering drops the very last reflected triangle per instructor requirement', () => {
   const { codeData } = buildDefaultCodeData();
   const renderableTriangles = api.getRenderableActiveTriangles(codeData.triangles);
 
-  assert.equal(renderableTriangles.length, codeData.triangles.length);
-  assert.equal(renderableTriangles.length, codeData.parsedSequence.reduce((total, step) => total + step.count, 0));
-  assert.strictEqual(renderableTriangles.at(-1), codeData.triangles.at(-1));
-  assert.equal(renderableTriangles.at(-1).id, 'Code-T37');
+  assert.equal(renderableTriangles.length, codeData.triangles.length - 1);
+  assert.equal(renderableTriangles.length, codeData.parsedSequence.reduce((total, step) => total + step.count, 0) - 1);
+  assert.strictEqual(renderableTriangles.at(-1), codeData.triangles.at(-2));
+  assert.equal(renderableTriangles.at(-1).id, 'Code-T36');
 });
 
 test('ray mode keeps the terminal reflected triangle when the path ends at the origin after the last bounce', () => {
