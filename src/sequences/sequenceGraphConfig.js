@@ -65,6 +65,15 @@ export const colorForSequenceNumber = (number) => (
  * error tagged as its own, so e.g. blurring a valid Angle A/B field while a
  * Step error is showing can never blank out that unrelated Step error.
  *
+ * `rayAngleInput`/`draftRayAngleInput` are this row's own optional
+ * Trajectory Angle (degrees, as typed text) — an alternate way to give this
+ * graph a shot without typing a code: when its own Code Sequence is empty,
+ * a non-blank Trajectory Angle is traced against this row's own base
+ * triangle and the resulting billiard code is derived and used in its
+ * place (see App.jsx's deriveEffectiveSequenceCode). A non-blank Code
+ * Sequence always wins over a Trajectory Angle on the same row. Follows
+ * the same draft/applied split as every other field here.
+ *
  * `title`/`notes`/`tags`/`favorite`/`visibility` mirror the richer metadata
  * fields the file-based GraphDatabase (server/graphDatabase/graphDatabase.js)
  * already stores per graph — carried here purely so a row's full metadata
@@ -75,7 +84,7 @@ export const colorForSequenceNumber = (number) => (
  * "don't invent UI ahead of a real need" convention elsewhere.
  */
 export const createSequenceRow = ({
-  number, sequenceText = '', angleStepInput = '0.1', angleA = '', angleB = '',
+  number, sequenceText = '', angleStepInput = '0.1', angleA = '', angleB = '', rayAngleInput = '',
   title = '', notes = '', tags = [], favorite = false, visibility = 'private',
 }) => ({
   id: `seq-${number}`,
@@ -88,6 +97,8 @@ export const createSequenceRow = ({
   angleB,
   draftAngleA: angleA,
   draftAngleB: angleB,
+  rayAngleInput,
+  draftRayAngleInput: rayAngleInput,
   color: colorForSequenceNumber(number),
   visible: true,
   validationError: null,
