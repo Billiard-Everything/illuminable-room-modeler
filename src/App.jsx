@@ -4465,10 +4465,6 @@ export default function App() {
                   <h2 className="text-[10px] uppercase tracking-wider font-bold text-slate-400 flex items-center gap-1.5">
                     <List className="w-3 h-3"/> Vertices Log
                   </h2>
-                  <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500 cursor-pointer hover:text-cyan-200 transition-colors">
-                    <input type="checkbox" checked={showAllLabels} onChange={e => setShowAllLabels(e.target.checked)} className="accent-cyan-400 w-3 h-3" />
-                    PERSIST LABELS
-                  </label>
                 </div>
 
                 <div className="space-y-2">
@@ -4579,9 +4575,16 @@ export default function App() {
               {isZoomLocked ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
               <span className="text-[10px] font-bold">{isZoomLocked ? 'Unlock View' : 'Lock View'}</span>
             </button>
+            <button
+              onClick={() => setShowAllLabels(current => !current)}
+              className={`px-2.5 py-2 transition-colors flex items-center gap-1.5 border-l border-white/10 ${showAllLabels ? 'bg-cyan-500/20 text-cyan-200' : 'hover:bg-[#172230] text-slate-300 hover:text-cyan-200'}`}
+              title="Keep all vertex labels visible on the canvas."
+            >
+              <span className="text-[10px] font-bold">Labels</span>
+            </button>
           </div>
         </div>
-        
+
         {/* Interactive SVG Area */}
         <div 
           ref={containerRef}
