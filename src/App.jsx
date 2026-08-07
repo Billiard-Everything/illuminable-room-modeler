@@ -4453,7 +4453,13 @@ export default function App() {
                   <ChevronRight className="w-3 h-3" /> Boundary Intersections
                 </h3>
                 <div className="bg-[#0b1016] p-2.5 rounded-md border border-white/10 max-h-24 overflow-y-auto font-mono text-[11px] font-medium text-slate-300 custom-scrollbar break-words leading-relaxed shadow-inner tracking-widest">
-                  {codeData.sideSequence?.join(' ')}
+                  {/* The final entry is where the unfolded path lands exactly
+                      on a vertex, not a genuine side crossing, so it is
+                      dropped from the displayed boundary count. The
+                      underlying codeData.sideSequence itself stays intact —
+                      it still feeds haveSameSideSequence's path-equality
+                      checks, which must keep comparing the full path. */}
+                  {codeData.sideSequence?.slice(0, -1).join(' ')}
                 </div>
               </div>
             )}
