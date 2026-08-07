@@ -2668,6 +2668,11 @@ export default function App() {
   // Sequence-text <input> elements by row id, so the error modal can return
   // focus to the exact row that was rejected once it's dismissed.
   const sequenceInputRefsRef = useRef({});
+  // Which row's Trace Ray Angle field is currently focused, if any — while
+  // focused, that field shows the raw draft being typed (see the field's
+  // own value expression) so numbers don't jump under the user's cursor;
+  // at rest it always mirrors Global Angle, per the root-cause note there.
+  const [focusedRayAngleRowId, setFocusedRayAngleRowId] = useState(null);
   // The graph-card list's own scroll container, so a newly added card can
   // be scrolled into view automatically instead of requiring a manual
   // scroll to find it below the existing cards.
@@ -4157,6 +4162,16 @@ export default function App() {
                   // editable draft, since the typed angle is ignored anyway.
                   const isRowCodeDriven = row.sequenceText.trim().length > 0;
                   const rowGlobalAngle = codeDataByRowId[row.id]?.globalAngleDegrees;
+                  // Trace Ray Angle must always read back the same value as
+                  // Global Angle (see codeDataByRowId's own comment on why
+                  // the two previously disagreed for angle-driven rows): at
+                  // rest it mirrors the computed Global Angle unconditionally
+                  // — code-driven or angle-driven — falling back to the raw
+                  // draft only while this exact field is being actively
+                  // typed into (so the number a user is mid-typing doesn't
+                  // get overwritten under their cursor) or when there's no
+                  // valid computed result yet.
+                  const showComputedRayAngle = Number.isFinite(rowGlobalAngle) && (isRowCodeDriven || focusedRayAngleRowId !== row.id);
                   const plotInfo = plotStatusById[row.id];
                   const isPlotting = plotInfo?.status === 'running';
                   // Status line uses the professor's requested vocabulary
@@ -4367,7 +4382,11 @@ export default function App() {
                           consulted when the Code Sequence above is blank
                           (see deriveEffectiveSequenceCode; a non-blank Code
                           Sequence always wins). Traced from vertex A, same
-                          as the old standalone Trace Ray tab. */}
+                          as the old standalone Trace Ray tab. At rest, this
+                          field always mirrors this shot's own Global Angle
+                          (see showComputedRayAngle) rather than the raw
+                          typed value, so it can never disagree with the
+                          Shot Vector panel's own "Global Angle" readout. */}
                       <div className="mt-1.5 flex items-center gap-1.5">
                         <span className="text-[10px] font-bold text-slate-500 shrink-0">or</span>
                         <div className="relative flex-1">
@@ -4375,10 +4394,10 @@ export default function App() {
                             type="number"
                             step={angleInputStep}
                             readOnly={anglesIncomplete || isRowCodeDriven}
-                            value={isRowCodeDriven && Number.isFinite(rowGlobalAngle) ? formatFixed(rowGlobalAngle) : row.draftRayAngleInput}
+                            value={showComputedRayAngle ? formatFixed(rowGlobalAngle) : row.draftRayAngleInput}
                             onChange={e => handleRayAngleDraftChange(row.id, e.target.value)}
-                            onFocus={() => handleSelectActiveSequence(row.id)}
-                            onBlur={() => handleApplyRayAngleDraft(row.id)}
+                            onFocus={() => { handleSelectActiveSequence(row.id); setFocusedRayAngleRowId(row.id); }}
+                            onBlur={() => { handleApplyRayAngleDraft(row.id); setFocusedRayAngleRowId(null); }}
                             onKeyDown={e => {
                               e.stopPropagation();
                               if (anglesIncomplete || isRowCodeDriven) { e.preventDefault(); return; }
@@ -4388,7 +4407,7 @@ export default function App() {
                             onClick={e => e.stopPropagation()}
                             placeholder="Trace Ray Angle"
                             aria-label={`${row.label} trace ray angle`}
-                            title={isRowCodeDriven ? `${row.label}'s Code Sequence above is set, so this shows that code's own Global Angle instead of an editable value.` : `Traced from vertex A; used only while ${row.label}'s Code Sequence above is empty.`}
+                            title={isRowCodeDriven ? `${row.label}'s Code Sequence above is set, so this shows that code's own Global Angle instead of an editable value.` : `Traced from vertex A; used only while ${row.label}'s Code Sequence above is empty. Shows this shot's own Global Angle once applied.`}
                             className={`w-full bg-[#080b0f] border rounded px-2 py-1 pr-5 text-[11px] font-mono outline-none placeholder:text-slate-600 ${anglesIncomplete || isRowCodeDriven ? 'border-white/5 text-slate-600 cursor-not-allowed' : 'border-white/10 text-slate-100 focus:border-amber-300/50'}`}
                           />
                           <span className="absolute right-1.5 top-1 text-slate-500 font-mono text-[10px]">&deg;</span>
