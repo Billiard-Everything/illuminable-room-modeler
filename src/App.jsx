@@ -1,7 +1,7 @@
 // React supplies state, refs, effects, and memoization for this client-only tool.
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 // Lucide supplies recognizable control/status icons without custom SVG code.
-import { Maximize, RotateCcw, Zap, Settings2, Code2, Compass, ChevronRight, ChevronLeft, Activity, CheckCircle2, XCircle, ShieldCheck, Eye, EyeOff, Search, AlertTriangle, Sun, Moon, ZoomIn, ZoomOut, Lock, Unlock, ScatterChart, Plus, Loader2, Trash2, Library, Database, Save, Copy, RefreshCw, Focus, Crosshair } from 'lucide-react';
+import { Maximize, RotateCcw, Zap, Settings2, Code2, Compass, ChevronRight, ChevronLeft, Activity, CheckCircle2, XCircle, ShieldCheck, Eye, EyeOff, Search, AlertTriangle, Sun, Moon, ZoomIn, ZoomOut, Lock, Unlock, ScatterChart, Plus, Loader2, Trash2, Library, Database, Save, Copy, RefreshCw, Focus, Crosshair, LogOut, User } from 'lucide-react';
 // The angle-region plot pop-up lives in its own module (see src/anglePlot) so
 // it can be unit-tested without React and does not bloat this file further.
 import GraphSetupWindow from './sequences/GraphSetupWindow.jsx';
@@ -1770,7 +1770,7 @@ const jobPriorityForSequence = (seq, activeSequenceId, everRequestedIds) => {
 
 const GraphSimulatorView = ({
   sequences, activeSequenceId, angleParams, baseLength, buildValidateCandidateForSequence, resolveRowEffectiveSequenceText, refreshToken,
-  onRowStatusChange, forceGenerateRequest, maxBounces,
+  onRowStatusChange, forceGenerateRequest, maxBounces, persistenceEnabled = true,
   onShowAllGraphs, onHideAllGraphs, onToggleSequenceVisible, onSequenceColorChange, onRefreshVisible, onRemoveSequence, onSelectSequence,
   initialIsViewLocked, initialLegendCollapsed, initialFollowCursor,
   initialPanelZoom, initialPanelPan,
@@ -2233,7 +2233,14 @@ const GraphSimulatorView = ({
           // deleted in the meantime, matching startBackgroundExact's own
           // fresh-read pattern above.
           const currentSeqForSave = sequencesRef.current.find((s) => s.id === seq.id) ?? seq;
-          if (!bgTimeLimited && !uploadAttemptedHashesRef.current.has(exactHash)) {
+          // Guests get zero backend calls and never write to the permanent
+          // local GraphDatabase — "Guests may NOT permanently save graphs"
+          // has to hold even for this automatic background save, not just
+          // the manual "Save Graph" button (which is already hidden for
+          // Guests in the sidebar — see isGuest above). persistenceEnabled
+          // defaults to true so every existing signed-in/no-auth caller of
+          // this component keeps today's behavior unchanged.
+          if (persistenceEnabled && !bgTimeLimited && !uploadAttemptedHashesRef.current.has(exactHash)) {
             uploadAttemptedHashesRef.current.add(exactHash);
             const graphParams = graphParamsFromSequence(seqForIdentity, baseLength);
             // The row's own richer metadata (title/color/notes/tags/
@@ -2726,14 +2733,21 @@ const GraphSimulatorView = ({
         )}
         {!legendCollapsed && (
           <div className="flex flex-wrap content-start gap-1.5 px-3 pb-2 h-24 overflow-y-auto custom-scrollbar">
-            {sequences.map((seq) => (
+            {sequences.map((seq) => {
+              // Legend text always reflects the code actually driving this
+              // graph — its own typed code, or (for an Angle-Ray-only row)
+              // the code its own ray derives — never the possibly-blank
+              // seq.sequenceText directly, so an angle-driven graph never
+              // misleadingly reads "(empty)" here.
+              const effectiveSequenceText = resolveRowEffectiveSequenceText(seq.sequenceText, seq.rayAngleInput, { a: seq.angleA, b: seq.angleB, length: baseLength });
+              return (
               <div
                 key={seq.id}
                 onClick={() => onSelectSequence?.(seq.id)}
                 role="button"
                 tabIndex={0}
                 onKeyDown={e => { if (e.target !== e.currentTarget) return; if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelectSequence?.(seq.id); } }}
-                title={`${seq.label}: ${seq.sequenceText || '(empty)'} · Step ${seq.angleStepInput} · ${seq.id === activeSequenceId ? 'active in main view · ' : ''}${rowStatusText(seq)} · Click to select and jump to this graph's card`}
+                title={`${seq.label}: ${effectiveSequenceText || '(empty)'} · Step ${seq.angleStepInput} · ${seq.id === activeSequenceId ? 'active in main view · ' : ''}${rowStatusText(seq)} · Click to select and jump to this graph's card`}
                 className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-[10px] font-mono transition-colors cursor-pointer ${seq.id === activeSequenceId ? 'border-amber-400/60 bg-amber-500/20 text-amber-100' : seq.visible ? 'border-white/10 bg-[#0b1016] text-slate-200' : 'border-white/10 bg-[#0b1016]/60 text-slate-400 opacity-80'}`}
               >
                 <input
@@ -2756,7 +2770,7 @@ const GraphSimulatorView = ({
                   className="w-3 h-3 shrink-0 rounded-full border border-black/30 p-0 bg-transparent cursor-pointer appearance-none overflow-hidden"
                 />
                 <span className="font-bold shrink-0">{seq.label}{seq.id === activeSequenceId ? ' •' : ''}</span>
-                <span className={seq.visible ? 'text-slate-400' : 'text-slate-500'}>&ldquo;{truncateSequenceText(seq.sequenceText, 16)}&rdquo;</span>
+                <span className={seq.visible ? 'text-slate-400' : 'text-slate-500'}>&ldquo;{truncateSequenceText(effectiveSequenceText, 16)}&rdquo;</span>
                 <span className={seq.visible ? 'text-slate-400' : 'text-slate-500'}>step {seq.angleStepInput}</span>
                 <span className="text-slate-500">{rowStatusText(seq)}</span>
                 <button
@@ -2769,7 +2783,8 @@ const GraphSimulatorView = ({
                   <Trash2 className="w-3 h-3" />
                 </button>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
@@ -2792,7 +2807,13 @@ const GraphSimulatorView = ({
 };
 
 
-export default function App() {
+export default function App({ auth }) {
+  // `auth` (see src/auth/useAuth.js/AuthGate.jsx) is only ever { status:
+  // 'guest' } or { status: 'signedIn', user, ... } here — AuthGate never
+  // mounts App while status is 'checking'/'unset'. Read directly where
+  // needed below (Graph Database Browser visibility, the background auto-
+  // save gate) rather than threaded through every intermediate prop chain.
+  const isGuest = auth?.status === 'guest';
   // --- WORKSPACE RESTORE ---
   // Loaded exactly once (useState's initializer runs only on the very first
   // render — see WorkspaceManager's own doc comment on why this is safe
@@ -2920,6 +2941,12 @@ export default function App() {
   // own value expression) so numbers don't jump under the user's cursor;
   // at rest it always mirrors Global Angle, per the root-cause note there.
   const [focusedRayAngleRowId, setFocusedRayAngleRowId] = useState(null);
+  // Which row's Code Sequence field is currently focused, if any — mirrors
+  // focusedRayAngleRowId above: while focused, that field shows the raw
+  // draft being typed (so a click-to-type doesn't start from pre-filled
+  // text); at rest, an angle-driven row's field shows its own Angle Ray's
+  // derived code instead of staying blank (see showComputedSequenceText).
+  const [focusedSequenceRowId, setFocusedSequenceRowId] = useState(null);
   // The graph-card list's own scroll container, so a newly added card can
   // be scrolled into view automatically instead of requiring a manual
   // scroll to find it below the existing cards.
@@ -3250,10 +3277,23 @@ export default function App() {
       // (same trimmed chain, same physical-A-at-origin start point).
       const renderableRowTriangles = getRenderableActiveTriangles(rowCodeData.triangles);
       const rowFinalShot = renderableRowTriangles.length > 0 ? renderableRowTriangles.at(-1).points[0] : rowTriangle.points[0];
-      map[row.id] = { ...rowCodeData, effectiveCode, globalAngleDegrees: getGlobalAngle(rowTriangle.points[0], rowFinalShot) };
+      // This row's own Vertex Line Test result — computed for every row
+      // (not just the active one), using the exact same validator the
+      // active row's own Sequence Logs panel shows, so a row's plot-status
+      // pill can correctly read "Error" instead of "Plotted" regardless of
+      // which row happens to be active or which tab is showing.
+      const rowShotValidation = buildPoolshotTowerValidation({
+        simulatorMode: 'code', baseTriangle: rowTriangle, activeTriangles: rowCodeData.triangles,
+        labelsMap: rowCodeData.idxToAngle, reflectionEdges: rowCodeData.reflectionEdges,
+        parsedSequence: rowCodeData.parsedSequence, clearanceEpsilon,
+      });
+      map[row.id] = {
+        ...rowCodeData, effectiveCode, globalAngleDegrees: getGlobalAngle(rowTriangle.points[0], rowFinalShot),
+        shotStatus: rowShotValidation.status, shotViolations: rowShotValidation.violations,
+      };
     }
     return map;
-  }, [sequences, baseCoordsInput, baseTriangleLength, maxBounces]);
+  }, [sequences, baseCoordsInput, baseTriangleLength, maxBounces, clearanceEpsilon]);
 
 
   // --- GEOMETRY ROUTER ---
@@ -3777,8 +3817,41 @@ export default function App() {
     }
     if (!applyAngleDrafts(id)) return;
     if (!applyAngleStepDraft(id)) return;
-    handleApplyRayAngleDraft(id);
+    if (!handleApplyRayAngleDraft(id)) return;
     if (!handleApplySequenceDraft(id)) return;
+
+    // Warn (without blocking the plot — the region sweep below is still
+    // useful even when this row's own current point isn't itself valid)
+    // whenever this row's own just-committed code+angles fail their own
+    // Vertex Line Test. handleApplySequenceDraft above already blocks this
+    // for the active row in Constrained mode (never reaches here), but
+    // every other row — and the active row in Unconstrained mode — was
+    // never checked at all, letting the status pill read "Plotted" with no
+    // warning of any kind. Reads the row's own DRAFT fields directly
+    // (codeDataByRowId, a useMemo, hasn't recomputed from the applies above
+    // yet this same tick) — mirrors codeDataByRowId's own per-row
+    // computation exactly.
+    const committedRow = sequences.find((r) => r.id === id);
+    if (committedRow) {
+      const candidateParams = { a: committedRow.draftAngleA, b: committedRow.draftAngleB, length: baseTriangleLength };
+      if (hasCompleteAngleParams(candidateParams) && hasValidAngleTriangle(candidateParams)) {
+        const rowTriangle = buildBaseTriangle('angles', baseCoordsInput, candidateParams);
+        const effectiveCode = deriveEffectiveSequenceCode(committedRow.draftSequenceText, committedRow.draftRayAngleInput, rowTriangle, maxBounces);
+        if (effectiveCode) {
+          const rowCodeData = unfoldCodeData(effectiveCode, rowTriangle, true);
+          const rowShotValidation = buildPoolshotTowerValidation({
+            simulatorMode: 'code', baseTriangle: rowTriangle, activeTriangles: rowCodeData.triangles,
+            labelsMap: rowCodeData.idxToAngle, reflectionEdges: rowCodeData.reflectionEdges,
+            parsedSequence: rowCodeData.parsedSequence, clearanceEpsilon,
+          });
+          if (rowShotValidation.status === 'invalid') {
+            const sections = buildVertexLineTestErrorSections(rowShotValidation.violations, clearanceEpsilon);
+            setErrorModal({ title: `${committedRow.label}'s Vertex Line Test is invalid.`, sections, focusId: null });
+          }
+        }
+      }
+    }
+
     setSimulatorMode('graph');
     setSequences(rows => rows.map(row => row.id === id ? { ...row, visible: true } : row));
     // A row sharing the exact same sequenceText/angleA/angleB/angleStepInput/
@@ -3928,6 +4001,10 @@ export default function App() {
   // automatic save already guards against (see AnglePlotWindow.jsx's own
   // `!bgTimeLimited` check). This button enforces the identical rule.
   const handleSaveGraphNow = async (row) => {
+    // Defense-in-depth on top of the button that calls this already being
+    // hidden for Guests (see isGuest above) — Guests never permanently
+    // save, full stop, regardless of how this got invoked.
+    if (isGuest) return;
     const plotInfo = plotStatusById[row.id];
     if (!plotInfo || plotInfo.renderInfo?.graphStatus !== GRAPH_STATUS.EXACT || !plotInfo.points?.length) return;
     setSavingGraphIds(prev => new Set(prev).add(row.id));
@@ -4092,17 +4169,68 @@ export default function App() {
     setSequences(rows => rows.map(row => row.id === id ? { ...row, draftSequenceText: row.sequenceText, validationError: null, validationErrorSource: null } : row));
   };
 
-  // Angle Ray needs none of the Code Sequence field's heavy
-  // Vertex Line Test gating: it's only ever consulted when this row's own
-  // Code Sequence is blank (see deriveEffectiveSequenceCode), and the code
-  // it derives is traced from a real reflection path, so it can never fail
-  // that test. A non-numeric or blank draft simply resolves to "no shot"
-  // for this row rather than needing its own rejection/error path.
   const handleRayAngleDraftChange = (id, text) => {
     setSequences(rows => rows.map(row => row.id === id ? { ...row, draftRayAngleInput: text } : row));
   };
+  // Mirrors handleApplySequenceDraft's own Constrained-mode Vertex Line
+  // Test gate exactly — a ray-derived code can still fail that strict,
+  // epsilon-based test even though it comes from a real traced reflection
+  // path (floating-point drift through the derive-code-from-edges round
+  // trip back into unfoldCodeData), so Angle Ray needs the identical
+  // "never commit a shot that fails its own line test" guarantee Code
+  // Sequence already has, not a lighter version of it. Reuses
+  // validateLockedCodeCandidate directly by handing it the code THIS ray
+  // value derives, instead of a typed one — that function only cares about
+  // the candidate text, never where it came from.
   const handleApplyRayAngleDraft = (id) => {
-    setSequences(rows => rows.map(row => row.id === id ? { ...row, rayAngleInput: row.draftRayAngleInput } : row));
+    const row = sequences.find((r) => r.id === id);
+    if (!row) return true;
+    if (row.draftRayAngleInput === row.rayAngleInput) return true;
+
+    // The ray is shot from physical vertex A (buildRayModeData's
+    // rayStartVertex: 0), which buildBaseTriangle always places at the
+    // origin with side AB along the positive x-axis and vertex C at angle
+    // A° from it — so the triangle's own interior at A spans exactly (0,
+    // Angle A). A ray at or past Angle A never enters the triangle at all,
+    // so it can never trace a real reflection path. Checked for every row
+    // (not just the active one — this is basic input sanitization, not the
+    // heavier Vertex Line Test below).
+    const trimmedRay = (row.draftRayAngleInput ?? '').toString().trim();
+    if (trimmedRay) {
+      const rayValue = Number(trimmedRay);
+      const angleAValue = Number(row.draftAngleA);
+      if (Number.isFinite(rayValue) && Number.isFinite(angleAValue) && rayValue >= angleAValue) {
+        const message = `${row.label}'s Angle Ray (${rayValue}°) must be strictly less than its own Angle A (${angleAValue}°) — the ray is shot from vertex A into the triangle's own interior angle there, which only spans up to Angle A.`;
+        setSequences(rows => rows.map(r => r.id === id ? { ...r, validationError: message, validationErrorSource: 'sequence' } : r));
+        setErrorModal({
+          title: 'Angle Ray must be less than Angle A',
+          sections: [{ heading: 'Problem', text: message }],
+          focusId: null,
+        });
+        return false;
+      }
+    }
+
+    if (id === activeSequenceId) {
+      const candidateAngleParams = { a: row.draftAngleA, b: row.draftAngleB, length: baseTriangleLength };
+      if (hasCompleteAngleParams(candidateAngleParams) && hasValidAngleTriangle(candidateAngleParams)) {
+        const candidateTriangle = buildBaseTriangle('angles', baseCoordsInput, candidateAngleParams);
+        const effectiveCode = deriveEffectiveSequenceCode('', row.draftRayAngleInput, candidateTriangle, maxBounces);
+        if (effectiveCode) {
+          const check = validateLockedCodeCandidate(effectiveCode, candidateAngleParams);
+          if (!check.allowed) {
+            const sections = buildVertexLineTestErrorSections(check.violations, clearanceEpsilon);
+            const flat = sections.map(s => `${s.heading}:\n${s.text}`).join('\n\n');
+            setSequences(rows => rows.map(r => r.id === id ? { ...r, validationError: flat, validationErrorSource: 'sequence' } : r));
+            setErrorModal({ title: 'Vertex Line Test is invalid.', sections, focusId: null });
+            return false;
+          }
+        }
+      }
+    }
+
+    setSequences(rows => rows.map(r => r.id === id ? { ...r, rayAngleInput: r.draftRayAngleInput, validationError: null, validationErrorSource: null } : r));
+    return true;
   };
   const handleCancelRayAngleDraft = (id) => {
     setSequences(rows => rows.map(row => row.id === id ? { ...row, draftRayAngleInput: row.rayAngleInput } : row));
@@ -4292,6 +4420,30 @@ export default function App() {
                 <Activity className="w-5 h-5 text-cyan-300" /> illuminable-room-modeler
               </h1>
               <p className="text-[11px] font-medium text-slate-500 uppercase tracking-widest">illuminable-room-modeler</p>
+              {/* Account state — the only place in the app shell a Guest
+                  session or a signed-in user's identity is shown, and the
+                  only way to sign out (see useAuth.js's own signOut). */}
+              {auth && (
+                <div className="mt-1.5 flex items-center gap-1.5">
+                  {isGuest ? (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-300 bg-amber-500/10 border border-amber-300/25 rounded px-1.5 py-0.5">
+                      <User className="w-2.5 h-2.5" /> Guest Mode
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-bold text-cyan-200 bg-cyan-500/10 border border-cyan-300/25 rounded px-1.5 py-0.5 truncate max-w-[160px]" title={auth.user?.email}>
+                      <User className="w-2.5 h-2.5 shrink-0" /> {auth.user?.displayName || auth.user?.email}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => auth.signOut()}
+                    title={isGuest ? 'Leave Guest mode and return to the login screen' : 'Sign out'}
+                    className="text-[10px] font-bold text-slate-500 hover:text-red-300 transition-colors flex items-center gap-0.5"
+                  >
+                    <LogOut className="w-2.5 h-2.5" /> {isGuest ? 'Leave' : 'Sign Out'}
+                  </button>
+                </div>
+              )}
             </div>
             <div className="flex shrink-0 gap-2">
               <button
@@ -4476,14 +4628,20 @@ export default function App() {
                 >
                   <Library className="w-3.5 h-3.5" /> Graph Library
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setIsGraphDatabaseOpen(true)}
-                  title="Search, sort, rename, tag, favorite, annotate, and instantly reload every graph permanently cached on this machine"
-                  className="flex flex-1 items-center justify-center gap-1.5 rounded-md border border-emerald-300/35 bg-emerald-500/15 px-2.5 py-1.5 text-[11px] font-bold text-emerald-100 transition-colors hover:bg-emerald-500/25"
-                >
-                  <Database className="w-3.5 h-3.5" /> Graph Database
-                </button>
+                {/* Guests never get the Graph Database Browser (permanent
+                    per-user storage, search/rename/tag/export/import) —
+                    "Guests may NOT permanently save graphs... access
+                    Graph Database Browser" is the spec's own words. */}
+                {!isGuest && (
+                  <button
+                    type="button"
+                    onClick={() => setIsGraphDatabaseOpen(true)}
+                    title="Search, sort, rename, tag, favorite, annotate, and instantly reload every graph permanently cached on this machine"
+                    className="flex flex-1 items-center justify-center gap-1.5 rounded-md border border-emerald-300/35 bg-emerald-500/15 px-2.5 py-1.5 text-[11px] font-bold text-emerald-100 transition-colors hover:bg-emerald-500/25"
+                  >
+                    <Database className="w-3.5 h-3.5" /> Graph Database
+                  </button>
+                )}
               </div>
 
               {/* One independent card per graph. Bounded height + its own
@@ -4520,6 +4678,14 @@ export default function App() {
                   // generated angle and the Angle Ray's derived code can both
                   // be copied straight out of this card, in either direction.
                   const rowEffectiveCode = codeDataByRowId[row.id]?.effectiveCode || '';
+                  // The Code Sequence field itself shows this row's own
+                  // Angle-Ray-derived code whenever it's angle-driven (the
+                  // typed field is genuinely blank in that case) and not the
+                  // one currently being typed into — mirrors
+                  // showComputedRayAngle's exact same pattern, just for the
+                  // other field. A code-driven row never needs this: its
+                  // draft already holds the real typed text.
+                  const showComputedSequenceText = !isRowCodeDriven && !!rowEffectiveCode && focusedSequenceRowId !== row.id;
                   // Angle Ray must always read back the same value as
                   // Global Angle (see codeDataByRowId's own comment on why
                   // the two previously disagreed for angle-driven rows): at
@@ -4532,6 +4698,17 @@ export default function App() {
                   const showComputedRayAngle = Number.isFinite(rowGlobalAngle) && (isRowCodeDriven || focusedRayAngleRowId !== row.id);
                   const plotInfo = plotStatusById[row.id];
                   const isPlotting = plotInfo?.status === 'running';
+                  // codeDataByRowId's own shotStatus (the Vertex Line Test,
+                  // computed for THIS row specifically — see its own
+                  // comment) is a *geometric* check of this row's own
+                  // current committed code+angles, a completely separate
+                  // concern from plotInfo.status (whether the region SWEEP
+                  // finished generating). A sweep can finish fine
+                  // ("Plotted") while this row's own exact point still
+                  // fails its own Vertex Line Test, which must never read
+                  // as "Plotted" — checked for every row, not just the
+                  // active one, and regardless of which tab is showing.
+                  const isRowShotInvalid = codeDataByRowId[row.id]?.shotStatus === 'invalid';
                   // Status line uses the professor's requested vocabulary
                   // (Not plotted / Calculating.../Plotted/Hidden/Error),
                   // with "Needs angles" as a more actionable, more specific
@@ -4540,6 +4717,7 @@ export default function App() {
                   const plotPhase = !row.visible ? 'Hidden'
                     : anglesIncomplete ? 'Needs angles'
                     : row.validationError ? 'Error'
+                    : isRowShotInvalid ? 'Error'
                     : isPlotting ? 'Calculating…'
                     : plotInfo?.status === 'invalid' ? 'Error'
                     : plotInfo?.status === 'done' ? 'Plotted'
@@ -4719,7 +4897,7 @@ export default function App() {
                       <input
                         type="text"
                         ref={el => { sequenceInputRefsRef.current[row.id] = el; }}
-                        value={row.draftSequenceText}
+                        value={showComputedSequenceText ? rowEffectiveCode : row.draftSequenceText}
                         readOnly={anglesIncomplete}
                         onChange={e => handleSequenceDraftChange(row.id, e.target.value)}
                         onMouseDown={e => {
@@ -4736,7 +4914,8 @@ export default function App() {
                             focusId: null,
                           });
                         }}
-                        onFocus={() => handleSelectActiveSequence(row.id)}
+                        onFocus={() => { handleSelectActiveSequence(row.id); setFocusedSequenceRowId(row.id); }}
+                        onBlur={() => setFocusedSequenceRowId(null)}
                         onKeyDown={e => {
                           e.stopPropagation();
                           if (anglesIncomplete) { e.preventDefault(); return; }
@@ -4746,20 +4925,9 @@ export default function App() {
                         placeholder={anglesIncomplete ? 'Enter Angle A/B above first' : 'Enter Code Sequence'}
                         aria-label={`${row.label} sequence text`}
                         aria-disabled={anglesIncomplete}
-                        title={anglesIncomplete ? `Set ${row.label}'s Angle A and Angle B above before entering a code.` : 'Type freely, including spaces. Press Enter to apply, Escape to discard the edit.'}
+                        title={anglesIncomplete ? `Set ${row.label}'s Angle A and Angle B above before entering a code.` : showComputedSequenceText ? `Derived from ${row.label}'s Angle Ray — type here to override with your own code instead.` : 'Type freely, including spaces. Press Enter to apply, Escape to discard the edit.'}
                         className={`mt-1.5 w-full bg-[#080b0f] border rounded px-2 py-1 text-[11px] font-mono outline-none placeholder:text-slate-600 ${anglesIncomplete ? 'border-white/5 text-slate-600 cursor-not-allowed' : 'border-white/10 text-slate-100 focus:border-cyan-300/50'}`}
                       />
-                      {/* When this row is angle-driven (Code Sequence above
-                          left blank on purpose), spell out the code that
-                          Angle Ray actually derives right here in plain,
-                          selectable text — not just as the chip breakdown
-                          further down — so it can be read and copied from
-                          this box too, same as when a code is typed directly. */}
-                      {!isRowCodeDriven && rowEffectiveCode && (
-                        <div className="mt-1 bg-[#0b1016] border border-amber-300/20 rounded px-2 py-1 text-[10px] font-mono text-amber-100 break-words select-all" title={`Derived from ${row.label}'s Angle Ray`}>
-                          {rowEffectiveCode}
-                        </div>
-                      )}
                       {/* Angle Ray: an alternate way to give this
                           graph a shot without typing a code — only
                           consulted when the Code Sequence above is blank
@@ -4895,28 +5063,33 @@ export default function App() {
                           Database": the same browser the sidebar's own
                           "Graph Database" button opens (see
                           setIsGraphDatabaseOpen below), placed here too so
-                          saving and browsing the result are one click apart. */}
-                      <div className="flex items-center gap-1.5 mt-1.5">
-                        <button
-                          type="button"
-                          onClick={e => { e.stopPropagation(); handleSaveGraphNow(row); }}
-                          disabled={!canSaveGraphNow}
-                          title={canSaveGraphNow ? `Save ${row.label} to the Graph Database now` : `Plot ${row.label} and wait for its exact computation to finish before it can be saved`}
-                          className="flex-1 flex items-center justify-center gap-1.5 bg-emerald-500/15 hover:bg-emerald-500/25 disabled:opacity-40 disabled:cursor-not-allowed border border-emerald-300/30 text-emerald-100 px-2.5 py-1 rounded-md text-[10px] font-bold transition-colors"
-                        >
-                          {savingGraphIds.has(row.id) ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
-                          {savingGraphIds.has(row.id) ? 'Saving…' : 'Save Graph'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={e => { e.stopPropagation(); setIsGraphDatabaseOpen(true); }}
-                          title="Open the Graph Database browser"
-                          className="flex-1 flex items-center justify-center gap-1.5 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-200 px-2.5 py-1 rounded-md text-[10px] font-bold transition-colors"
-                        >
-                          <Database className="w-3 h-3" />
-                          Open Graph Database
-                        </button>
-                      </div>
+                          saving and browsing the result are one click apart.
+                          Hidden entirely for Guests — "Guests may NOT
+                          permanently save graphs... access Graph Database
+                          Browser" (the spec's own words). */}
+                      {!isGuest && (
+                        <div className="flex items-center gap-1.5 mt-1.5">
+                          <button
+                            type="button"
+                            onClick={e => { e.stopPropagation(); handleSaveGraphNow(row); }}
+                            disabled={!canSaveGraphNow}
+                            title={canSaveGraphNow ? `Save ${row.label} to the Graph Database now` : `Plot ${row.label} and wait for its exact computation to finish before it can be saved`}
+                            className="flex-1 flex items-center justify-center gap-1.5 bg-emerald-500/15 hover:bg-emerald-500/25 disabled:opacity-40 disabled:cursor-not-allowed border border-emerald-300/30 text-emerald-100 px-2.5 py-1 rounded-md text-[10px] font-bold transition-colors"
+                          >
+                            {savingGraphIds.has(row.id) ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+                            {savingGraphIds.has(row.id) ? 'Saving…' : 'Save Graph'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={e => { e.stopPropagation(); setIsGraphDatabaseOpen(true); }}
+                            title="Open the Graph Database browser"
+                            className="flex-1 flex items-center justify-center gap-1.5 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-200 px-2.5 py-1 rounded-md text-[10px] font-bold transition-colors"
+                          >
+                            <Database className="w-3 h-3" />
+                            Open Graph Database
+                          </button>
+                        </div>
+                      )}
                       <div className="flex items-center justify-between gap-1.5 mt-1">
                         <span className={`text-[9px] font-bold ${plotPhaseColor}`}>{plotPhase}</span>
                         {plotPhase === 'Plotted' && Number.isFinite(plotInfo?.renderInfo?.durationMs) && (
@@ -5165,6 +5338,7 @@ export default function App() {
             onRowStatusChange={(id, info) => setPlotStatusById(prev => ({ ...prev, [id]: info }))}
             forceGenerateRequest={forceGenerateRequest}
             maxBounces={maxBounces}
+            persistenceEnabled={!isGuest}
             onShowAllGraphs={() => setSequences(rows => rows.map(r => ({ ...r, visible: true })))}
             onHideAllGraphs={() => setSequences(rows => rows.map(r => ({ ...r, visible: false })))}
             onToggleSequenceVisible={handleToggleSequenceVisible}
@@ -5644,7 +5818,10 @@ export default function App() {
           state itself — handleLoadGraphFromDatabase is what actually
           creates a new row and feeds it into the existing AnglePlotWindow
           pipeline. */}
-      {isGraphDatabaseOpen && (
+      {/* Defense-in-depth on top of the buttons above already being hidden
+          for Guests: this panel itself never mounts for a Guest session,
+          regardless of how isGraphDatabaseOpen got set. */}
+      {isGraphDatabaseOpen && !isGuest && (
         <GraphDatabasePanel
           isOpen={isGraphDatabaseOpen}
           onClose={() => setIsGraphDatabaseOpen(false)}
